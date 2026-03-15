@@ -1,0 +1,20 @@
+@import 'shared.css';
+
+body {
+  margin: 0;
+  padding: 0;
+  min-width: 320px;
+  max-height: 480px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+}
+
+.popup-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+  margin: var(--space-4);
+}
