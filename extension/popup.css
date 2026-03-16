@@ -18,3 +18,27 @@ body {
   color: var(--text-primary);
   margin: var(--space-4);
 }
+
+.popup-btn {
+  display: block;
+  width: 100%;
+  margin: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: center;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: none;
+  box-sizing: border-box;
+}
+
+.popup-btn--primary {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.popup-btn--primary:hover {
+  filter: brightness(1.1);
+}

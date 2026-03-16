@@ -1,5 +1,4 @@
-@import 'shared.css';
-
+/* shared.css linked from dashboard.html for reliable loading */
 body {
   margin: 0;
   padding: 0;

@@ -1,24 +1,22 @@
 # Specter
 
-Specter is a self-contained Chrome Extension that intercepts, classifies, and visualizes browser network traffic in real time for privacy auditing. It uses an ML classifier (trained offline, bundled as an ONNX model) to categorize each request by tracker type from request metadata alone. There is no external server, no Docker, no proxy, and no installation beyond loading the extension in Chrome.
+Specter is a self-contained Chrome Extension that intercepts, classifies, and visualizes browser network traffic in real time for privacy auditing. It categorizes each request by tracker type from request metadata alone. There is no external server, no Docker, no proxy, and no installation beyond loading the extension in Chrome.
 
 ## Architecture
 
-Everything runs inside the Chrome extension: request interception via `chrome.webRequest`, ONNX inference in the service worker (WebAssembly), storage in `chrome.storage.local`, and a full-page dashboard plus toolbar popup. No data leaves your machine.
+Everything runs inside the Chrome extension: request interception via `chrome.webRequest`, classification in the service worker, storage in `chrome.storage.local`, and a full-page dashboard plus toolbar popup. No data leaves your machine.
+
+**Classifier:** The extension currently uses a **rule-based classifier** (URL patterns, tracking params, blocklist, response headers) so it runs reliably in the service worker.
 
 ## Prerequisites
 
 - **Chrome 114+** (Manifest V3)
-- **Python 3.10+** (only for training the model via `train.py`; end users do not need Python)
+- **Python 3.10+** (only for training the model via `train.py`;)
 
 ## Developer setup
 
-1. Install Python dependencies and train the model (writes `extension/models/model.onnx` and `extension/data/blocklist.json`):
-   ```bash
-   pip install -r requirements.txt
-   python train.py
-   ```
-2. Bundle frontend libs (D3, Lucide, onnxruntime-web) into the extension:
+1. **Blocklist** (optional): `extension/data/blocklist.json` is used for rule-based classification. Populate it via `train.py` when implemented, or leave as `[]`.
+2. Bundle frontend libs (D3, Lucide) into the extension:
    ```bash
    npm install
    node scripts/bundle-libs.js
