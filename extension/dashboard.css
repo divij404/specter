@@ -25,6 +25,12 @@ body {
   color: var(--text-primary);
 }
 
+.dashboard-status {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: 400px 1fr 0;
