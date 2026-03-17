@@ -181,6 +181,12 @@ const DEFAULT_SETTINGS = {
 };
 
 let requestBuffer = [];
+let sessionTrackerCount = 0;
+
+function updateBadgeCount() {
+  chrome.action.setBadgeText({ text: String(sessionTrackerCount) });
+  chrome.action.setBadgeBackgroundColor({ color: '#22C55E' });
+}
 
 async function ensureSettings() {
   const { settings } = await chrome.storage.local.get('settings');
@@ -191,6 +197,7 @@ async function ensureSettings() {
 
 async function startSession() {
   await ensureSettings();
+  sessionTrackerCount = 0;
   const id = 'session_' + Date.now();
   const session = {
     id,
@@ -199,6 +206,8 @@ async function startSession() {
     active: true,
   };
   await chrome.storage.local.set({ 'session:current': session });
+  chrome.action.setBadgeBackgroundColor({ color: '#22C55E' });
+  chrome.action.setBadgeText({ text: '0' });
   return session;
 }
 
@@ -257,6 +266,7 @@ async function stopSession() {
   const history = histResult['sessions:history'] || [];
   updates['sessions:history'] = history.concat(summary);
   await chrome.storage.local.set(updates);
+  chrome.action.setBadgeText({ text: '' });
 }
 
 function broadcastToDashboard(message) {
@@ -348,6 +358,10 @@ chrome.webRequest.onCompleted.addListener(
       feature_importances: classification.feature_importances,
     };
     await batchWrite(request);
+    if (classification.category !== 'legitimate' && classification.category !== 'unclassified') {
+      sessionTrackerCount += 1;
+      updateBadgeCount();
+    }
     await updateSiteScore(features.initiator_domain, features.domain, classification.category);
     broadcastToDashboard({ type: 'request_update', request });
   },

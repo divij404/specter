@@ -7,12 +7,31 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <p class="popup-title">SPECTER</p>
+  <header class="popup-header">
+    <img src="icons/logo.svg" alt="" class="specter-logo specter-logo--popup">
+    <span class="popup-title">SPECTER</span>
+  </header>
+  <div class="popup-content">
+  <div class="popup-status-row">
+    <span id="status-dot" class="popup-status-dot popup-status-dot--stopped"></span>
+    <span id="status-label" class="popup-status-label">STOPPED</span>
+    <span id="timer" class="popup-timer">00:00</span>
+  </div>
+  <div class="popup-site-row">
+    <span id="current-site" class="popup-site-name">—</span>
+    <span id="privacy-score" class="popup-score">—</span>
+  </div>
+  <div class="popup-divider"></div>
+  <div class="popup-tracker-row">
+    <span id="tracker-count" class="popup-tracker-count">0 trackers detected</span>
+  </div>
   <div class="popup-session">
     <button type="button" id="btn-start" class="popup-btn">Start</button>
     <button type="button" id="btn-stop" class="popup-btn" disabled>Stop</button>
   </div>
   <a id="open-dashboard" class="popup-btn popup-btn--primary" href="#">Open Dashboard</a>
+  <button type="button" id="btn-copy-report" class="popup-btn popup-btn--ghost">Copy Report</button>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

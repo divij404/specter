@@ -26,10 +26,15 @@
   --text-muted: #3D5268;
   --text-inverse: #080B0F;
 
-  /* Brand Accent */
-  --accent: #00D4FF;
-  --accent-dim: #0A3040;
-  --accent-glow: rgba(0, 212, 255, 0.15);
+  /* Brand Accent — muted steel blue to match dark terminal-industrial theme */
+  --accent: #38A3B8;
+  --accent-dim: #1A3D47;
+  --accent-glow: rgba(56, 163, 184, 0.12);
+
+  /* Primary button (uses accent; override here if you want buttons to differ from other accent use) */
+  --btn-primary-bg: var(--accent);
+  --btn-primary-text: var(--text-inverse);
+  --btn-primary-hover-bg: #4AB3C7;
 
   /* Tracker category colors */
   --cat-behavioral: #FF4D6D;
@@ -80,3 +85,14 @@
   --text-2xl: 36px;
   --text-3xl: 56px;
 }
+
+/* Logo used in popup and dashboard */
+.specter-logo {
+  display: block;
+  width: auto;
+  height: 100%;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.specter-logo--popup { height: 24px; margin-right: var(--space-2); }
+.specter-logo--dashboard { height: 28px; margin-right: var(--space-2); }

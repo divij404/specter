@@ -1,32 +1,38 @@
 /**
- * Generate placeholder PNG icons for the extension (Phase 1).
+ * Generate extension PNG icons from the SVG logo.
  * Run: node scripts/generate-icons.js
+ * Requires: npm install (sharp is used for SVG → PNG)
  */
 
 const fs = require('fs');
 const path = require('path');
-const PNG = require('pngjs').PNG;
+const sharp = require('sharp');
 
 const ICONS_DIR = path.join(__dirname, '..', 'extension', 'icons');
-// Design doc muted grey for placeholder
-const R = 0x3d, G = 0x52, B = 0x68, A = 255;
+const LOGO_SVG = path.join(ICONS_DIR, 'logo.svg');
+const SIZES = [16, 32, 48, 128, 256, 512];
 
-function createPng(size) {
-  const png = new PNG({ width: size, height: size });
-  for (let i = 0; i < png.data.length; i += 4) {
-    png.data[i] = R;
-    png.data[i + 1] = G;
-    png.data[i + 2] = B;
-    png.data[i + 3] = A;
+async function main() {
+  if (!fs.existsSync(LOGO_SVG)) {
+    console.error('Logo not found:', LOGO_SVG);
+    process.exit(1);
   }
-  return PNG.sync.write(png);
+  if (!fs.existsSync(ICONS_DIR)) {
+    fs.mkdirSync(ICONS_DIR, { recursive: true });
+  }
+
+  const svg = fs.readFileSync(LOGO_SVG);
+  for (const size of SIZES) {
+    const out = path.join(ICONS_DIR, `icon${size}.png`);
+    await sharp(svg)
+      .resize(size, size)
+      .png()
+      .toFile(out);
+    console.log('Created', out);
+  }
 }
 
-if (!fs.existsSync(ICONS_DIR)) fs.mkdirSync(ICONS_DIR, { recursive: true });
-
-for (const size of [16, 48, 128]) {
-  const buf = createPng(size);
-  const out = path.join(ICONS_DIR, `icon${size}.png`);
-  fs.writeFileSync(out, buf);
-  console.log('Created', out);
-}
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
