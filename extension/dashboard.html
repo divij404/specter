@@ -14,16 +14,64 @@
   </header>
   <main class="dashboard-grid">
     <aside class="panel panel-feed">
-      <div class="panel-header">LIVE FEED</div>
-      <div class="panel-content"></div>
+      <div class="panel-header panel-header-feed">
+        <div class="feed-title-row">
+          <span class="feed-header-dot" id="feed-header-dot" aria-hidden="true"></span>
+          <h2 class="feed-header-title">LIVE FEED</h2>
+          <span class="feed-title-spacer"></span>
+          <button type="button" class="pause-btn running" id="pause-btn" aria-label="Pause feed" style="display: none;">⏸ PAUSE</button>
+          <button type="button" class="session-btn stopped" id="session-btn" aria-live="polite">▶ START</button>
+          <span class="feed-header-timer" id="feed-header-timer" aria-live="polite">00:00</span>
+        </div>
+        <div class="session-confirm" id="session-confirm" hidden role="status">
+          <span class="session-confirm-text">Clear <span id="session-confirm-count">0</span> existing rows?</span>
+          <button type="button" class="session-confirm-clear" id="session-confirm-clear">YES, CLEAR</button>
+          <button type="button" class="session-confirm-keep" id="session-confirm-keep">KEEP ROWS</button>
+        </div>
+        <div class="feed-filters" id="feed-filters"></div>
+      </div>
+      <div class="panel-content panel-content-feed">
+        <div class="feed-inner">
+          <div class="feed-table-wrap">
+            <div class="feed-toolbar" id="feed-toolbar"></div>
+            <div class="feed-header-row">
+              <span class="feed-th feed-th-category">CATEGORY</span>
+              <span class="feed-th feed-th-domain">DOMAIN</span>
+              <span class="feed-th feed-th-url">URL</span>
+              <span class="feed-th feed-th-conf">CONFIDENCE</span>
+              <span class="feed-th feed-th-size">SIZE</span>
+            </div>
+            <div class="feed-list" id="feed-container">
+              <div class="feed-new-pill" id="feed-new-pill" hidden>↑ <span id="feed-new-pill-count">0</span> new</div>
+              <div class="feed-rows" id="feed-list"></div>
+              <div class="feed-empty" id="feed-empty">
+                <svg class="feed-empty-ghost" viewBox="0 0 32 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16 4C9.4 4 4 9.4 4 16v16l4-4 4 4 4-4 4 4V16c0-6.6-5.4-12-12-12z"/>
+                  <ellipse cx="11" cy="14" rx="2" ry="2.5" fill="currentColor"/>
+                  <ellipse cx="21" cy="14" rx="2" ry="2.5" fill="currentColor"/>
+                </svg>
+                <span class="feed-empty-text" id="feed-empty-text">Start a session from the Specter popup to begin capturing requests.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="feed-pause-overlay" id="feed-pause-overlay" hidden>
+        <span class="feed-pause-text">⏸ PAUSED</span>
+      </div>
     </aside>
     <section class="panel panel-main">
       <div class="panel-header">SITE SUMMARY</div>
       <div class="panel-content"></div>
     </section>
-    <aside class="panel panel-detail panel-detail--collapsed">
-      <div class="panel-header">DETAIL</div>
-      <div class="panel-content"></div>
+    <aside class="panel panel-detail panel-detail--collapsed" id="panel-detail">
+      <div class="panel-header">
+        <span>DETAIL</span>
+        <button type="button" class="panel-detail-close" id="detail-close" aria-label="Close">×</button>
+      </div>
+      <div class="panel-content">
+        <div class="detail-placeholder" id="detail-placeholder">Select a request to view details.</div>
+      </div>
     </aside>
   </main>
   <script src="dashboard.js"></script>

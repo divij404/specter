@@ -2,6 +2,7 @@
 
 const btnStart = document.getElementById('btn-start');
 const btnStop = document.getElementById('btn-stop');
+const btnPause = document.getElementById('btn-pause');
 const linkDashboard = document.getElementById('open-dashboard');
 const btnCopyReport = document.getElementById('btn-copy-report');
 const statusDot = document.getElementById('status-dot');
@@ -10,6 +11,8 @@ const timerEl = document.getElementById('timer');
 const currentSiteEl = document.getElementById('current-site');
 const privacyScoreEl = document.getElementById('privacy-score');
 const trackerCountEl = document.getElementById('tracker-count');
+const siteRow = document.getElementById('site-row');
+const popupContent = document.getElementById('popup-content');
 
 let timerInterval = null;
 let currentDomain = '';
@@ -21,12 +24,31 @@ function eTLDPlusOne(hostname) {
   return parts.slice(-2).join('.');
 }
 
-function setSessionState(active) {
+function setSessionState(active, paused) {
   btnStart.disabled = !!active;
   btnStop.disabled = !active;
-  statusDot.className = 'popup-status-dot ' + (active ? 'popup-status-dot--recording' : 'popup-status-dot--stopped');
-  statusLabel.textContent = active ? 'RECORDING' : 'STOPPED';
-  if (active) startTimer(); else stopTimer();
+  btnPause.disabled = !active;
+  if (btnPause) {
+    btnPause.textContent = paused ? 'Resume' : 'Pause';
+    btnPause.title = paused ? 'Resume recording' : 'Pause recording';
+  }
+  if (popupContent) popupContent.classList.toggle('recording', !!active);
+  if (linkDashboard) {
+    linkDashboard.className = 'popup-btn ' + (active ? 'popup-btn--ghost' : 'popup-btn--primary');
+  }
+  if (!active) {
+    statusDot.className = 'popup-status-dot popup-status-dot--stopped';
+    statusLabel.textContent = 'STOPPED';
+    stopTimer();
+  } else if (paused) {
+    statusDot.className = 'popup-status-dot popup-status-dot--paused';
+    statusLabel.textContent = 'PAUSED';
+    stopTimer();
+  } else {
+    statusDot.className = 'popup-status-dot popup-status-dot--recording';
+    statusLabel.textContent = 'RECORDING';
+    startTimer();
+  }
 }
 
 function formatElapsed(ms) {
@@ -41,10 +63,15 @@ function formatElapsed(ms) {
 function startTimer() {
   stopTimer();
   function tick() {
-    chrome.storage.local.get('session:current', (result) => {
+    chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (result) => {
       const session = result['session:current'];
       if (!session || !session.active) {
         stopTimer();
+        return;
+      }
+      if (result['session:paused']) {
+        const sec = Math.max(0, Number(result['session:elapsed_frozen']) || 0);
+        timerEl.textContent = formatElapsed(sec * 1000);
         return;
       }
       timerEl.textContent = formatElapsed(Date.now() - session.started_at);
@@ -85,15 +112,23 @@ function refreshUI() {
       currentSiteEl.textContent = '—';
     }
 
-    chrome.storage.local.get(['session:current'], (result) => {
+    chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (result) => {
       const session = result['session:current'];
       const active = session && session.active;
-      setSessionState(active);
+      const paused = !!(active && result['session:paused']);
+      setSessionState(active, paused);
+
+      if (active && paused) {
+        const sec = Math.max(0, Number(result['session:elapsed_frozen']) || 0);
+        timerEl.textContent = formatElapsed(sec * 1000);
+      }
 
       if (!active) {
         privacyScoreEl.textContent = '—';
         privacyScoreEl.className = 'popup-score popup-score--none';
         trackerCountEl.textContent = '0 trackers detected';
+        trackerCountEl.classList.remove('popup-tracker-count--scanning');
+        if (siteRow) siteRow.classList.remove('popup-site-row--compact');
         return;
       }
 
@@ -101,15 +136,18 @@ function refreshUI() {
       chrome.storage.local.get([scoresKey], (res) => {
         const scores = res[scoresKey] || {};
         const entry = currentDomain ? scores[currentDomain] : null;
+        if (siteRow) siteRow.classList.toggle('popup-site-row--compact', !entry);
         if (entry) {
           privacyScoreEl.textContent = String(entry.privacy_score);
           privacyScoreEl.className = 'popup-score ' + scoreColorClass(entry.privacy_score);
           const n = entry.tracker_requests || 0;
           trackerCountEl.textContent = n + ' tracker' + (n === 1 ? '' : 's') + ' detected';
+          trackerCountEl.classList.remove('popup-tracker-count--scanning');
         } else {
           privacyScoreEl.textContent = '—';
           privacyScoreEl.className = 'popup-score popup-score--none';
-          trackerCountEl.textContent = '0 trackers detected';
+          trackerCountEl.textContent = 'Scanning…';
+          trackerCountEl.classList.add('popup-tracker-count--scanning');
         }
       });
     });
@@ -127,6 +165,22 @@ btnStop.addEventListener('click', () => {
     refreshUI();
   });
 });
+
+if (btnPause) {
+  btnPause.addEventListener('click', () => {
+    chrome.storage.local.get(['session:current', 'session:paused'], (result) => {
+      const session = result['session:current'];
+      const paused = !!result['session:paused'];
+      if (!session || !session.active) return;
+      if (paused) {
+        chrome.runtime.sendMessage({ type: 'resume_session' }, () => refreshUI());
+      } else {
+        const elapsedSeconds = Math.floor((Date.now() - session.started_at) / 1000);
+        chrome.runtime.sendMessage({ type: 'pause_session', elapsed_seconds: elapsedSeconds }, () => refreshUI());
+      }
+    });
+  });
+}
 
 linkDashboard.addEventListener('click', (e) => {
   e.preventDefault();
@@ -182,7 +236,7 @@ btnCopyReport.addEventListener('click', () => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (changes['session:current'] || (currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:')))) {
+  if (changes['session:current'] || changes['session:paused'] || changes['session:elapsed_frozen'] || (currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:')))) {
     refreshUI();
   }
 });

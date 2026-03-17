@@ -11,13 +11,13 @@
     <img src="icons/logo.svg" alt="" class="specter-logo specter-logo--popup">
     <span class="popup-title">SPECTER</span>
   </header>
-  <div class="popup-content">
+  <div id="popup-content" class="popup-content">
   <div class="popup-status-row">
     <span id="status-dot" class="popup-status-dot popup-status-dot--stopped"></span>
     <span id="status-label" class="popup-status-label">STOPPED</span>
     <span id="timer" class="popup-timer">00:00</span>
   </div>
-  <div class="popup-site-row">
+  <div id="site-row" class="popup-site-row">
     <span id="current-site" class="popup-site-name">—</span>
     <span id="privacy-score" class="popup-score">—</span>
   </div>
@@ -26,11 +26,12 @@
     <span id="tracker-count" class="popup-tracker-count">0 trackers detected</span>
   </div>
   <div class="popup-session">
-    <button type="button" id="btn-start" class="popup-btn">Start</button>
-    <button type="button" id="btn-stop" class="popup-btn" disabled>Stop</button>
+    <button type="button" id="btn-start" class="popup-btn popup-btn--primary" title="Start recording">Start</button>
+    <button type="button" id="btn-pause" class="popup-btn popup-btn--secondary" disabled title="Pause recording">Pause</button>
+    <button type="button" id="btn-stop" class="popup-btn popup-btn--destructive" disabled title="Stop recording">Stop</button>
   </div>
   <a id="open-dashboard" class="popup-btn popup-btn--primary" href="#">Open Dashboard</a>
-  <button type="button" id="btn-copy-report" class="popup-btn popup-btn--ghost">Copy Report</button>
+  <button type="button" id="btn-copy-report" class="popup-btn popup-btn--link">Copy Report</button>
   </div>
   <script src="popup.js"></script>
 </body>

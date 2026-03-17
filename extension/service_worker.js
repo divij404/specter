@@ -205,7 +205,11 @@ async function startSession() {
     stopped_at: null,
     active: true,
   };
-  await chrome.storage.local.set({ 'session:current': session });
+  await chrome.storage.local.set({
+    'session:current': session,
+    'session:paused': false,
+    'session:elapsed_frozen': 0,
+  });
   chrome.action.setBadgeBackgroundColor({ color: '#22C55E' });
   chrome.action.setBadgeText({ text: '0' });
   return session;
@@ -233,6 +237,8 @@ async function stopSession() {
       stopped_at: Date.now(),
       active: false,
     },
+    'session:paused': false,
+    'session:elapsed_frozen': 0,
   };
   const reqKey = 'requests:' + session.id;
   const scoresKey = 'scores:' + session.id;
@@ -387,15 +393,36 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     });
     return true;
   }
+  if (message.type === 'pause_session') {
+    const elapsed = message.elapsed_seconds ?? 0;
+    chrome.storage.local.set({ 'session:paused': true, 'session:elapsed_frozen': elapsed }).then(() => {
+      broadcastToDashboard({ type: 'feed_paused', elapsed_seconds: elapsed });
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+  if (message.type === 'resume_session') {
+    chrome.storage.local.set({ 'session:paused': false, 'session:elapsed_frozen': 0 }).then(() => {
+      broadcastToDashboard({ type: 'feed_resumed' });
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
   if (message.type === 'get_session_data') {
     const sid = message.session_id;
-    chrome.storage.local.get(['session:current', 'requests:' + sid, 'scores:' + sid]).then((result) => {
-      sendResponse({
-        session: result['session:current'],
-        requests: result['requests:' + sid],
-        scores: result['scores:' + sid],
+    flushBuffer()
+      .then(() => chrome.storage.local.get(['session:current', 'requests:' + sid, 'scores:' + sid]))
+      .then((result) => {
+        sendResponse({
+          session: result['session:current'],
+          requests: result['requests:' + sid] || [],
+          scores: result['scores:' + sid],
+        });
+      })
+      .catch((err) => {
+        console.warn('Specter get_session_data:', err);
+        sendResponse({ session: null, requests: [], scores: {} });
       });
-    });
     return true;
   }
   sendResponse({ ok: false });
