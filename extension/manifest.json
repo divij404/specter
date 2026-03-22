@@ -4,11 +4,11 @@
   "version": "1.0.1",
   "description": "Browser network traffic analyzer and privacy auditor",
   "icons": {
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png",
-    "256": "icons/icon256.png",
-    "512": "icons/icon512.png"
+    "32": "icons/extension/icon32.png",
+    "48": "icons/extension/icon48.png",
+    "128": "icons/extension/icon128.png",
+    "256": "icons/extension/icon256.png",
+    "512": "icons/extension/icon512.png"
   },
   "permissions": [
     "webRequest",
@@ -26,12 +26,12 @@
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "icons/icon16.png",
-      "32": "icons/icon32.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png",
-      "256": "icons/icon256.png",
-      "512": "icons/icon512.png"
+      "16": "icons/extension/icon16.png",
+      "32": "icons/extension/icon32.png",
+      "48": "icons/extension/icon48.png",
+      "128": "icons/extension/icon128.png",
+      "256": "icons/extension/icon256.png",
+      "512": "icons/extension/icon512.png"
     }
   },
   "content_security_policy": {

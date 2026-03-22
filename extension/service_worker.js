@@ -332,6 +332,7 @@ async function updateSiteScore(initiatorDomain, requestDomain, category) {
   entry.privacy_score = Math.max(0, 100 - deduction);
   entry.last_updated = Date.now();
   await chrome.storage.local.set({ [scoresKey]: scores });
+  broadcastToDashboard({ type: 'score_update', domain: siteDomain, score: entry });
 }
 
 async function batchWrite(request) {

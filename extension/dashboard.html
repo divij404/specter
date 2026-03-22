@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="dashboard-nav">
-    <img src="icons/logo.svg" alt="" class="specter-logo specter-logo--dashboard">
+    <img src="icons/brand/logo.svg" alt="" class="specter-logo specter-logo--dashboard">
     <span class="dashboard-logo">SPECTER</span>
   </header>
   <main class="dashboard-grid">
@@ -60,10 +60,19 @@
         <span class="feed-pause-text">⏸ PAUSED</span>
       </div>
     </aside>
-    <section class="panel panel-main">
-      <div class="panel-header">SITE SUMMARY</div>
-      <div class="panel-content"></div>
-    </section>
+    <div class="dashboard-main-col">
+      <section class="panel panel-main">
+        <div class="panel-header panel-header--site-summary">
+          <span class="panel-header-title">SITE SUMMARY</span>
+          <div id="site-summary-site-dropdown" class="site-summary-dropdown-wrap"></div>
+        </div>
+        <div class="panel-content"><div id="site-summary-root"></div></div>
+      </section>
+      <section class="panel panel-fingerprint">
+        <div class="panel-header">FINGERPRINTING ALERTS</div>
+        <div class="panel-content"><div id="fingerprint-alerts-root"></div></div>
+      </section>
+    </div>
     <aside class="panel panel-detail panel-detail--collapsed" id="panel-detail">
       <div class="panel-header">
         <span>DETAIL</span>
@@ -74,6 +83,7 @@
       </div>
     </aside>
   </main>
+  <div id="specter-tooltip" class="specter-tooltip" role="tooltip" aria-hidden="true"></div>
   <script src="dashboard.js"></script>
 </body>
 </html>

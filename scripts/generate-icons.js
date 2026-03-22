@@ -9,7 +9,9 @@ const path = require('path');
 const sharp = require('sharp');
 
 const ICONS_DIR = path.join(__dirname, '..', 'extension', 'icons');
-const LOGO_SVG = path.join(ICONS_DIR, 'logo.svg');
+const BRAND_DIR = path.join(ICONS_DIR, 'brand');
+const EXTENSION_ICONS_DIR = path.join(ICONS_DIR, 'extension');
+const LOGO_SVG = path.join(BRAND_DIR, 'logo.svg');
 const SIZES = [16, 32, 48, 128, 256, 512];
 
 async function main() {
@@ -17,13 +19,11 @@ async function main() {
     console.error('Logo not found:', LOGO_SVG);
     process.exit(1);
   }
-  if (!fs.existsSync(ICONS_DIR)) {
-    fs.mkdirSync(ICONS_DIR, { recursive: true });
-  }
+  fs.mkdirSync(EXTENSION_ICONS_DIR, { recursive: true });
 
   const svg = fs.readFileSync(LOGO_SVG);
   for (const size of SIZES) {
-    const out = path.join(ICONS_DIR, `icon${size}.png`);
+    const out = path.join(EXTENSION_ICONS_DIR, `icon${size}.png`);
     await sharp(svg)
       .resize(size, size)
       .png()

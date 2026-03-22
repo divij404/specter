@@ -84,6 +84,40 @@
   --text-xl: 24px;
   --text-2xl: 36px;
   --text-3xl: 56px;
+
+  /* Tooltips — site-wide */
+  --tooltip-bg: #0d1f1f;
+  --tooltip-border: rgba(0, 200, 200, 0.3);
+  --tooltip-text: var(--text-primary);
+  --tooltip-font: var(--font-mono);
+  --tooltip-delay: 400ms;
+  --tooltip-fade: 100ms;
+}
+
+/* Styled tooltip — used by dashboard (and popup if needed) */
+.specter-tooltip {
+  position: fixed;
+  z-index: 9999;
+  padding: 6px 10px;
+  max-width: 280px;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-line;
+  background: var(--tooltip-bg);
+  border: 1px solid var(--tooltip-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--tooltip-font);
+  font-size: var(--text-xs);
+  color: var(--tooltip-text);
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity var(--tooltip-fade) ease;
+}
+
+.specter-tooltip.is-visible {
+  opacity: 1;
 }
 
 /* Logo used in popup and dashboard */
