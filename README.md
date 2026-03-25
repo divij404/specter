@@ -12,7 +12,7 @@ A Chrome extension that records and classifies network requests—trackers, anal
 Install the extension or load the unzipped folder at `chrome://extensions` (turn on **Developer mode**, then **Load unpacked**). No build step.
 
 **From source**  
-1. `npm install && npm run bundle-libs`  
+1. `npm install && npm run bundle-libs` (copies D3 and other vendored libs into `extension/lib/` — required for the dashboard timeline)  
 2. `node scripts/generate-icons.js` if you need icons  
 3. Open `chrome://extensions` → **Load unpacked** → select the `extension` folder  
 

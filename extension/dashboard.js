@@ -60,7 +60,13 @@ let lastGroupCounts = new Map();
 let clearFeedOnStart = false;
 let frozenElapsedSeconds = 0;
 
+/* Phase 9: request detail + VirusTotal */
+let vtLastRequestTime = 0;
+let vtCountdownInterval = null;
+
 /* Phase 7: site summary */
+/** Dropdown sentinel: aggregate stats + timeline across the whole session (feed filters still apply). */
+const SUMMARY_SCOPE_ALL_SITES = '__specter_all_sites__';
 let siteScores = {};
 let currentSiteDomain = null;
 let lastRenderedScore = null;
@@ -73,12 +79,78 @@ function extractETLDPlusOne(hostname) {
   return parts.slice(-2).join('.');
 }
 
+function isExtensionSchemeSiteKey(siteKey) {
+  return /^(chrome-extension|moz-extension|safari-web-extension):\/\//i.test(String(siteKey));
+}
+
+function isBrowserInternalSiteKey(siteKey) {
+  const s = String(siteKey).toLowerCase();
+  return (
+    /^(chrome|edge|brave|opera|vivaldi|about|devtools|view-source|chrome-extension|moz-extension|safari-web-extension):/i.test(
+      siteKey
+    ) ||
+    s.startsWith('chrome://') ||
+    s.startsWith('edge://') ||
+    s.startsWith('about:') ||
+    s.startsWith('devtools:')
+  );
+}
+
+/** Hostname-like site key (eTLD+1 / site row key), not a full URL. */
+function hasLikelyPublicTld(hostname) {
+  if (!hostname || typeof hostname !== 'string') return false;
+  const h = hostname.trim().toLowerCase();
+  if (h === 'localhost') return true;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return false;
+  const i = h.lastIndexOf('.');
+  if (i <= 0 || i >= h.length - 1) return false;
+  const tld = h.slice(i + 1);
+  if (tld.length < 2 || tld.length > 63) return false;
+  if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/i.test(tld) && !/^xn--[a-z0-9-]+$/i.test(tld)) return false;
+  if (/^\d+$/.test(tld)) return false;
+  return true;
+}
+
+function formatSiteDisplayName(siteKey) {
+  if (siteKey == null || siteKey === '') return '\u2014';
+  if (siteKey === '_direct') return 'Direct';
+  const raw = String(siteKey);
+  const hasDot = raw.includes('.');
+  if (raw.length > 30) {
+    if (isExtensionSchemeSiteKey(raw)) return '[EXTENSION PAGE]';
+    if (isBrowserInternalSiteKey(raw)) return '[INTERNAL]';
+    return '[EXTENSION PAGE]';
+  }
+  if (!hasDot || !hasLikelyPublicTld(raw)) {
+    if (isExtensionSchemeSiteKey(raw)) return '[EXTENSION PAGE]';
+    return '[INTERNAL]';
+  }
+  return raw;
+}
+
+function isMaskedSiteDisplayName(display) {
+  return display === '[EXTENSION PAGE]' || display === '[INTERNAL]';
+}
+
 function getCurrentSiteDomain(callback) {
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+    callback(null);
+    return;
+  }
   if (summarySelectedDomain != null && siteScores[summarySelectedDomain]) {
     callback(summarySelectedDomain);
     return;
   }
   callback(getWorstSiteDomain());
+}
+
+/** Site key used for per-site timeline (null = none / empty chart). */
+function getSummaryTimelineSiteKey() {
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) return null;
+  if (summarySelectedDomain != null && siteScores[summarySelectedDomain]) {
+    return summarySelectedDomain;
+  }
+  return getWorstSiteDomain();
 }
 
 function getWorstSiteDomain() {
@@ -91,16 +163,23 @@ function getWorstSiteDomain() {
   return worst[0];
 }
 
-function getScoreColorClass(scoreVal, scoreEntry) {
-  const hasBehavioral = scoreEntry && (scoreEntry.unique_behavioral?.length ?? 0) > 0;
-  const hasFingerprinting = scoreEntry && (scoreEntry.unique_fingerprinting?.length ?? 0) > 0;
-  const hasRiskyTrackers = hasBehavioral || hasFingerprinting;
-  if (hasRiskyTrackers) {
-    if (scoreVal >= 50) return 'score-mid';
-    return 'score-low';
+function getSessionWorstPrivacyScore() {
+  const entries = Object.values(siteScores);
+  if (entries.length === 0) return null;
+  let min = 100;
+  for (const s of entries) {
+    const p = s.privacy_score;
+    if (p != null && p < min) min = p;
   }
-  if (scoreVal >= 80) return 'score-high';
-  if (scoreVal >= 50) return 'score-mid';
+  return min;
+}
+
+/** Privacy score color by numeric band only (dashboard + doughnut legend consistency). */
+function getScoreColorClass(scoreVal) {
+  const v = Number(scoreVal);
+  if (Number.isNaN(v)) return 'score-low';
+  if (v >= 80) return 'score-high';
+  if (v >= 50) return 'score-mid';
   return 'score-low';
 }
 
@@ -115,16 +194,23 @@ function animatePrivacyScore(element, fromVal, toVal, durationMs) {
     const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     const value = Math.round(from + (to - from) * eased);
     element.textContent = String(value);
+    element.className = 'site-summary-score-value ' + getScoreColorClass(value);
     if (t < 1) requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 }
 
 function renderSiteSummary() {
-  if (summarySelectedDomain != null && siteScores[summarySelectedDomain]) {
-    currentSiteDomain = summarySelectedDomain;
+  const isAllSitesScope = summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES;
+
+  if (!isAllSitesScope) {
+    if (summarySelectedDomain != null && siteScores[summarySelectedDomain]) {
+      currentSiteDomain = summarySelectedDomain;
+    } else {
+      currentSiteDomain = getWorstSiteDomain();
+    }
   } else {
-    currentSiteDomain = getWorstSiteDomain();
+    currentSiteDomain = null;
   }
 
   const dropdownContainer = document.getElementById('site-summary-site-dropdown');
@@ -134,26 +220,62 @@ function renderSiteSummary() {
 
   const root = document.getElementById('site-summary-root');
   if (!root) return;
-  if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
+
+  if (isAllSitesScope) {
+    const scopeRequests = applyFilters(feedRequests);
+    if (scopeRequests.length === 0 && Object.keys(siteScores).length === 0) {
+      root.className = 'site-summary-layout site-summary-layout--empty';
+      root.innerHTML =
+        '<p class="site-summary-empty">No session data yet. Start browsing or choose a site.</p>';
+      renderFingerprintingAlerts();
+      scheduleTimelineRender();
+      return;
+    }
+  } else if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
+    root.className = 'site-summary-layout site-summary-layout--empty';
     root.innerHTML = '<p class="site-summary-empty">No site data yet. Start browsing to see summary.</p>';
-    renderFingerprintingAlerts(null);
+    renderFingerprintingAlerts();
+    scheduleTimelineRender();
     return;
   }
-  const score = siteScores[currentSiteDomain];
-  const domainLabel = currentSiteDomain === '_direct' ? 'Direct' : currentSiteDomain;
-  const scoreVal = score.privacy_score ?? 0;
-  const scoreClass = getScoreColorClass(scoreVal, score);
 
-  const requestsForSite = feedRequests.filter(
-    (r) => (r.initiator_domain || '_direct') === currentSiteDomain
-  );
-  const totalRequests = score.total_requests ?? 0;
-  const uniqueTrackers = score.unique_tracker_domains ?? 0;
-  let dataVolumeBytes = 0;
-  for (const r of requestsForSite) {
-    if (r.response_size_bytes != null) dataVolumeBytes += r.response_size_bytes;
+  const score = !isAllSitesScope ? siteScores[currentSiteDomain] : null;
+  const domainLabel = isAllSitesScope ? 'All sites (session)' : formatSiteDisplayName(currentSiteDomain);
+  const scoreVal = isAllSitesScope
+    ? (getSessionWorstPrivacyScore() ?? 100)
+    : (score.privacy_score ?? 0);
+  const scoreClass = getScoreColorClass(scoreVal);
+
+  const requestsForSite = isAllSitesScope
+    ? applyFilters(feedRequests)
+    : feedRequests.filter((r) => (r.initiator_domain || '_direct') === currentSiteDomain);
+
+  let totalRequests;
+  let uniqueTrackers;
+  let dataVolumeKB;
+  if (isAllSitesScope) {
+    totalRequests = requestsForSite.length;
+    const trackerDomSet = new Set();
+    for (const r of requestsForSite) {
+      if (r.category !== 'legitimate' && r.category !== 'unclassified' && r.domain) {
+        trackerDomSet.add(r.domain);
+      }
+    }
+    uniqueTrackers = trackerDomSet.size;
+    let dataVolumeBytes = 0;
+    for (const r of requestsForSite) {
+      if (r.response_size_bytes != null) dataVolumeBytes += r.response_size_bytes;
+    }
+    dataVolumeKB = (dataVolumeBytes / 1024).toFixed(1);
+  } else {
+    totalRequests = score.total_requests ?? 0;
+    uniqueTrackers = score.unique_tracker_domains ?? 0;
+    let dataVolumeBytes = 0;
+    for (const r of requestsForSite) {
+      if (r.response_size_bytes != null) dataVolumeBytes += r.response_size_bytes;
+    }
+    dataVolumeKB = (dataVolumeBytes / 1024).toFixed(1);
   }
-  const dataVolumeKB = (dataVolumeBytes / 1024).toFixed(1);
 
   const domainByCount = new Map();
   const domainUrls = new Map();
@@ -191,20 +313,35 @@ function renderSiteSummary() {
   }
   lastRenderedScore = scoreVal;
 
+  root.className = 'site-summary-layout';
   root.innerHTML = '';
+
+  const mainCol = document.createElement('div');
+  mainCol.className = 'site-summary-main';
+
+  const asideCol = document.createElement('div');
+  asideCol.className = 'site-summary-aside';
+
   const domainEl = document.createElement('h3');
-  domainEl.className = 'site-summary-domain';
+  domainEl.className =
+    'site-summary-domain' + (isMaskedSiteDisplayName(domainLabel) ? ' site-summary-domain--masked' : '');
   domainEl.textContent = domainLabel;
-  root.appendChild(domainEl);
+  if (!isAllSitesScope && currentSiteDomain) {
+    domainEl.setAttribute('title', currentSiteDomain);
+  } else {
+    domainEl.setAttribute('title', domainLabel);
+  }
+  mainCol.appendChild(domainEl);
 
   const scoreBlock = document.createElement('div');
   scoreBlock.className = 'site-summary-score-block';
   scoreBlock.appendChild(scoreValueEl);
   const scoreLabel = document.createElement('div');
   scoreLabel.className = 'site-summary-score-label';
-  scoreLabel.textContent = '/100  PRIVACY SCORE';
+  scoreLabel.textContent = isAllSitesScope
+    ? '/100  WORST SITE SCORE (SESSION)'
+    : '/100  PRIVACY SCORE';
   scoreBlock.appendChild(scoreLabel);
-  root.appendChild(scoreBlock);
 
   const stats = document.createElement('div');
   stats.className = 'site-summary-stats';
@@ -218,13 +355,12 @@ function renderSiteSummary() {
     '<div class="site-summary-stat-box"><div class="label">DATA VOLUME</div><div class="value">' +
     escapeAttr(dataVolumeKB) +
     ' KB</div></div>';
-  root.appendChild(stats);
 
-  const doughnutWrap = document.createElement('div');
-  doughnutWrap.className = 'site-summary-doughnut-wrap';
-  doughnutWrap.id = 'site-summary-doughnut';
-  root.appendChild(doughnutWrap);
-  renderDoughnut('#site-summary-doughnut', categoryCounts);
+  const kpis = document.createElement('div');
+  kpis.className = 'site-summary-kpis';
+  kpis.appendChild(scoreBlock);
+  kpis.appendChild(stats);
+  mainCol.appendChild(kpis);
 
   const worstWrap = document.createElement('div');
   worstWrap.className = 'site-summary-worst';
@@ -252,6 +388,7 @@ function renderSiteSummary() {
     const label = document.createElement('span');
     label.className = 'site-summary-worst-label';
     label.textContent = dom;
+    label.setAttribute('title', dom);
     const badge = document.createElement('span');
     badge.className = 'site-summary-worst-badge';
     badge.textContent = count + ' request' + (count !== 1 ? 's' : '');
@@ -267,9 +404,21 @@ function renderSiteSummary() {
     worstList.appendChild(li);
   }
   worstWrap.appendChild(worstList);
-  root.appendChild(worstWrap);
+  mainCol.appendChild(worstWrap);
 
-  renderFingerprintingAlerts(score);
+  const doughnutWrap = document.createElement('div');
+  doughnutWrap.className = 'site-summary-doughnut-wrap';
+  doughnutWrap.id = 'site-summary-doughnut';
+  asideCol.appendChild(doughnutWrap);
+
+  root.appendChild(mainCol);
+  root.appendChild(asideCol);
+
+  /* Pass element: querySelector cannot find nodes not yet attached to document. */
+  renderDoughnut(doughnutWrap, categoryCounts);
+
+  renderFingerprintingAlerts();
+  scheduleTimelineRender();
 }
 
 function getCategoryColorVar(cat) {
@@ -287,12 +436,16 @@ function getCategoryColorVar(cat) {
 
 const DOUGHNUT_MIN_ANGLE = 0.08;
 
-function renderDoughnut(containerSelector, dataByCategory) {
-  const container = document.querySelector(containerSelector);
+function renderDoughnut(containerOrSelector, dataByCategory) {
+  const container =
+    typeof containerOrSelector === 'string'
+      ? document.querySelector(containerOrSelector)
+      : containerOrSelector;
   if (!container) return;
   container.innerHTML = '';
   const total = Object.values(dataByCategory).reduce((a, b) => a + b, 0);
-  const size = 200;
+  /* viewBox size; displayed size set in CSS (aside column scales to fit panel) */
+  const size = 136;
   const radius = size / 2;
   const innerRadius = radius * 0.55;
   const doc = document.documentElement;
@@ -300,6 +453,8 @@ function renderDoughnut(containerSelector, dataByCategory) {
     const v = getCategoryColorVar(cat);
     return getComputedStyle(doc).getPropertyValue(v).trim() || '#3D5268';
   };
+  const borderMuted =
+    getComputedStyle(doc).getPropertyValue('--border-default').trim() || '#263040';
   const order = [
     'behavioral',
     'fingerprinting',
@@ -329,11 +484,25 @@ function renderDoughnut(containerSelector, dataByCategory) {
   });
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
-  svg.setAttribute('width', size);
-  svg.setAttribute('height', size);
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   svg.className = 'site-summary-doughnut-svg';
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Tracker requests by category, total ' + total);
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   g.setAttribute('transform', 'translate(' + radius + ',' + radius + ')');
+  if (segments.length === 0) {
+    const ringR = (radius + innerRadius) / 2;
+    const ringW = radius - innerRadius;
+    const emptyRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    emptyRing.setAttribute('r', String(ringR));
+    emptyRing.setAttribute('fill', 'none');
+    emptyRing.setAttribute('stroke', borderMuted);
+    emptyRing.setAttribute('stroke-width', String(ringW));
+    emptyRing.setAttribute('class', 'site-summary-doughnut-empty-ring');
+    g.appendChild(emptyRing);
+  }
   for (const seg of segments) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     const start = seg.startAngle - Math.PI / 2;
@@ -390,31 +559,270 @@ function renderDoughnut(containerSelector, dataByCategory) {
   container.appendChild(legend);
 }
 
-function renderFingerprintingAlerts(score) {
-  const root = document.getElementById('fingerprint-alerts-root');
-  if (!root) return;
-  if (!score || !score.has_fingerprinting) {
-    root.innerHTML =
-      '<div class="fingerprint-empty">' +
-      '<span class="fingerprint-empty-icon" aria-hidden="true">✓</span>' +
-      '<span class="fingerprint-empty-text">No fingerprinting detected.</span>' +
-      '</div>';
+/** URL heuristics for fingerprint surface APIs (network-visible script URLs only). */
+const FP_SURFACE_SIGNALS = [
+  {
+    key: 'canvas',
+    label: 'Canvas',
+    test: (u) =>
+      /canvas|html2canvas|fingerprintjs|fpjs|evercookie|cc\.canvas|fingerprint.?pro/i.test(u),
+  },
+  {
+    key: 'webgl',
+    label: 'WebGL',
+    test: (u) => /webgl|three\.js|three\.min|\/three\/|twigl|babylon\.js|regl\.min/i.test(u),
+  },
+  {
+    key: 'audio',
+    label: 'AudioContext',
+    test: (u) =>
+      /audiocontext|webaudio|audioctx|audio_fingerprint|audiobuffer|oscillator|offlineaudiocontext/i.test(
+        u
+      ),
+  },
+  {
+    key: 'font',
+    label: 'Font Enumeration',
+    test: (u) =>
+      /font[_-]?enumer|document\.fonts|fontface|font-detect|font_list|fontprobe|fontmetrics/i.test(u),
+  },
+];
+
+/**
+ * Requests initiated by the given site that are plausible carriers for fingerprint-related
+ * script URLs (avoids matching "canvas" in HTML page paths, etc.).
+ */
+function isFingerprintSurfaceCandidateRequest(r, siteDomain) {
+  if (!siteDomain || (r.initiator_domain || '_direct') !== siteDomain) return false;
+  if (r.category === 'fingerprinting') return true;
+  const url = r.url || '';
+  const u = url.toLowerCase();
+  const ct = (r.content_type || '').toLowerCase();
+  const looksLikeScript =
+    ct.includes('javascript') ||
+    ct.includes('ecmascript') ||
+    /\.(js|mjs|wasm)(\?|$|#)/i.test(url);
+  if (!looksLikeScript) return false;
+  return true;
+}
+
+/** All feed rows for fingerprint surface + entropy analysis for the selected summary site. */
+function getSiteFingerprintAnalysisRequests(siteDomain) {
+  if (!siteDomain) return [];
+  return feedRequests.filter((r) => isFingerprintSurfaceCandidateRequest(r, siteDomain));
+}
+
+function isGlobalFingerprintSurfaceCandidateRequest(r) {
+  if (r.category === 'fingerprinting') return true;
+  const url = r.url || '';
+  const ct = (r.content_type || '').toLowerCase();
+  const looksLikeScript =
+    ct.includes('javascript') ||
+    ct.includes('ecmascript') ||
+    /\.(js|mjs|wasm)(\?|$|#)/i.test(url);
+  return looksLikeScript;
+}
+
+function getGlobalFingerprintAnalysisRequests() {
+  return applyFilters(feedRequests).filter((r) => isGlobalFingerprintSurfaceCandidateRequest(r));
+}
+
+function analyzeFingerprintSurfaceSignals(fpRequests) {
+  const byKey = {};
+  for (const s of FP_SURFACE_SIGNALS) {
+    byKey[s.key] = { ok: false, domain: '' };
+  }
+  for (const r of fpRequests) {
+    const u = (r.url || '').toLowerCase();
+    const dom = r.domain || '—';
+    for (const s of FP_SURFACE_SIGNALS) {
+      if (!byKey[s.key].ok && s.test(u)) {
+        byKey[s.key] = { ok: true, domain: dom };
+      }
+    }
+  }
+  const typesHit = FP_SURFACE_SIGNALS.filter((s) => byKey[s.key].ok).length;
+  const uniqDomains = [...new Set(fpRequests.map((r) => r.domain).filter(Boolean))];
+  let entropy = Math.min(10, typesHit * 2 + Math.min(5, uniqDomains.length));
+  if (typesHit === 0 && uniqDomains.length > 0) {
+    entropy = Math.min(10, Math.max(entropy, Math.min(6, uniqDomains.length * 2)));
+  }
+  return { byKey, typesHit, entropy, uniqDomains };
+}
+
+function updateFingerprintDrawerHeaderSite() {
+  const el = document.getElementById('fingerprint-drawer-heading');
+  if (!el) return;
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+    el.textContent = 'FINGERPRINTING \u2014 All sites (session)';
+    el.classList.remove('fingerprint-drawer-heading--muted');
     return;
   }
-  const list = score.unique_fingerprinting || [];
-  root.innerHTML = '';
-  const desc = document.createElement('p');
-  desc.className = 'fingerprint-desc';
-  desc.textContent = 'Scripts from these domains may fingerprint the browser.';
-  root.appendChild(desc);
-  const ul = document.createElement('ul');
-  ul.className = 'fingerprint-list';
-  for (const domain of list) {
-    const li = document.createElement('li');
-    li.textContent = domain;
-    ul.appendChild(li);
+  if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
+    el.textContent = 'FINGERPRINTING \u2014 \u2014';
+    el.classList.add('fingerprint-drawer-heading--muted');
+    return;
   }
-  root.appendChild(ul);
+  const disp = formatSiteDisplayName(currentSiteDomain);
+  el.textContent = 'FINGERPRINTING \u2014 ' + disp;
+  el.classList.toggle('fingerprint-drawer-heading--muted', isMaskedSiteDisplayName(disp));
+}
+
+function setEntropyTierDisplay(entropy) {
+  const tierEl = document.getElementById('fingerprint-entropy-tier');
+  const valueEl = document.getElementById('fingerprint-entropy-value');
+  if (!tierEl || !valueEl) return;
+  const n = Math.max(0, Math.min(10, Number(entropy) || 0));
+  let text = 'LOW RISK';
+  let tierCls = 'fingerprint-entropy-tier fingerprint-entropy-tier--low';
+  let valueCls = 'fingerprint-entropy-value entropy-value--low';
+  if (n >= 7) {
+    text = 'HIGH RISK';
+    tierCls = 'fingerprint-entropy-tier fingerprint-entropy-tier--high';
+    valueCls = 'fingerprint-entropy-value entropy-value--high';
+  } else if (n >= 4) {
+    text = 'MODERATE';
+    tierCls = 'fingerprint-entropy-tier fingerprint-entropy-tier--mid';
+    valueCls = 'fingerprint-entropy-value entropy-value--mid';
+  }
+  tierEl.textContent = text;
+  tierEl.className = tierCls;
+  valueEl.className = valueCls;
+}
+
+function renderFingerprintingAlerts() {
+  const rowsRoot = document.getElementById('fingerprint-signal-rows');
+  const entropyEl = document.getElementById('fingerprint-entropy-value');
+  if (!rowsRoot || !entropyEl) return;
+
+  updateFingerprintDrawerHeaderSite();
+
+  rowsRoot.textContent = '';
+
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+    const globalReqs = getGlobalFingerprintAnalysisRequests();
+    const { byKey, entropy } = analyzeFingerprintSurfaceSignals(globalReqs);
+    for (const s of FP_SURFACE_SIGNALS) {
+      const { ok, domain } = byKey[s.key];
+      rowsRoot.appendChild(buildFingerprintSignalRow(s.label, ok, ok ? domain : null));
+    }
+    entropyEl.textContent = String(entropy);
+    setEntropyTierDisplay(entropy);
+    return;
+  }
+
+  if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
+    for (const s of FP_SURFACE_SIGNALS) {
+      rowsRoot.appendChild(buildFingerprintSignalRow(s.label, false, null));
+    }
+    entropyEl.textContent = '0';
+    setEntropyTierDisplay(0);
+    return;
+  }
+
+  const siteReqs = getSiteFingerprintAnalysisRequests(currentSiteDomain);
+  const { byKey, entropy } = analyzeFingerprintSurfaceSignals(siteReqs);
+
+  for (const s of FP_SURFACE_SIGNALS) {
+    const { ok, domain } = byKey[s.key];
+    rowsRoot.appendChild(buildFingerprintSignalRow(s.label, ok, ok ? domain : null));
+  }
+
+  entropyEl.textContent = String(entropy);
+  setEntropyTierDisplay(entropy);
+}
+
+function buildFingerprintSignalRow(label, ok, domain) {
+  const row = document.createElement('div');
+  row.className = 'fingerprint-signal-row';
+  const lab = document.createElement('span');
+  lab.className = 'fingerprint-signal-label';
+  lab.textContent = label;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'fingerprint-signal-status-wrap';
+  const st = document.createElement('span');
+  st.className =
+    'fingerprint-signal-status ' + (ok ? 'fingerprint-signal-status--ok' : 'fingerprint-signal-status--no');
+  st.textContent = ok ? '\u2713' : '\u2014';
+  st.setAttribute('aria-label', ok ? 'Detected' : 'Not detected');
+  wrap.appendChild(st);
+  if (ok && domain != null && domain !== '') {
+    const dom = document.createElement('span');
+    const fd = formatSiteDisplayName(domain);
+    dom.className =
+      'fingerprint-signal-domain fingerprint-signal-domain--ok' +
+      (isMaskedSiteDisplayName(fd) ? ' fingerprint-signal-domain--masked' : '');
+    dom.textContent = fd;
+    dom.title = String(domain);
+    wrap.appendChild(dom);
+  }
+  row.appendChild(lab);
+  row.appendChild(wrap);
+  return row;
+}
+
+/** When true, bottom zone shows fingerprinting panel (timeline hidden). */
+let fingerprintDrawerOpen = false;
+
+function updateBottomViewToggleLabel() {
+  const btn = document.getElementById('bottom-view-toggle');
+  const toolbarTitle = document.getElementById('dashboard-bottom-toolbar-title');
+  if (btn) {
+    btn.textContent = fingerprintDrawerOpen ? '\u25b2 TIMELINE' : '\u25b2 FINGERPRINTING';
+    btn.setAttribute('aria-expanded', fingerprintDrawerOpen ? 'true' : 'false');
+    btn.classList.toggle('bottom-view-toggle--active', fingerprintDrawerOpen);
+  }
+  if (toolbarTitle) {
+    toolbarTitle.textContent = fingerprintDrawerOpen ? 'FINGERPRINTING' : 'TIMELINE';
+  }
+}
+
+function setFingerprintDrawerOpen(open) {
+  fingerprintDrawerOpen = !!open;
+  updateBottomViewToggleLabel();
+  const stack = document.getElementById('dashboard-bottom-stack');
+  const drawer = document.getElementById('fingerprint-drawer');
+  const tlLayer = document.getElementById('dashboard-timeline-layer');
+  if (stack) stack.setAttribute('data-view', fingerprintDrawerOpen ? 'fingerprint' : 'timeline');
+  if (drawer) {
+    drawer.setAttribute('aria-hidden', fingerprintDrawerOpen ? 'false' : 'true');
+  }
+  if (tlLayer) {
+    tlLayer.setAttribute('aria-hidden', fingerprintDrawerOpen ? 'true' : 'false');
+  }
+  if (fingerprintDrawerOpen) {
+    updateFingerprintDrawerHeaderSite();
+    renderFingerprintingAlerts();
+  }
+  requestAnimationFrame(() => scheduleTimelineRender());
+}
+
+function setupFingerprintDrawer() {
+  const toggle = document.getElementById('bottom-view-toggle');
+  const closeBtn = document.getElementById('fingerprint-drawer-close');
+  if (toggle) {
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = !fingerprintDrawerOpen;
+      fingerprintDrawerOpen = next;
+      updateBottomViewToggleLabel();
+      const stack = document.getElementById('dashboard-bottom-stack');
+      const drawer = document.getElementById('fingerprint-drawer');
+      const tlLayer = document.getElementById('dashboard-timeline-layer');
+      if (stack) stack.setAttribute('data-view', next ? 'fingerprint' : 'timeline');
+      if (drawer) drawer.setAttribute('aria-hidden', next ? 'false' : 'true');
+      if (tlLayer) tlLayer.setAttribute('aria-hidden', next ? 'true' : 'false');
+      if (next) {
+        updateFingerprintDrawerHeaderSite();
+        renderFingerprintingAlerts();
+      }
+      requestAnimationFrame(() => scheduleTimelineRender());
+    });
+  }
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => setFingerprintDrawerOpen(false));
+  }
 }
 
 function buildSiteSummaryDropdown(container) {
@@ -423,13 +831,17 @@ function buildSiteSummaryDropdown(container) {
     .filter(([, s]) => s && (s.privacy_score != null || s.total_requests != null))
     .sort((a, b) => (a[1].privacy_score ?? 100) - (b[1].privacy_score ?? 100));
   const worstDomain = domains.length > 0 ? domains[0][0] : null;
-  const displayLabel =
-    currentSiteDomain == null || currentSiteDomain === ''
-      ? 'Worst site'
-      : currentSiteDomain === '_direct'
-        ? 'Direct'
-        : currentSiteDomain;
-  const isWorstSelected = summarySelectedDomain == null || summarySelectedDomain === '';
+  let displayLabel;
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+    displayLabel = 'All sites';
+  } else if (currentSiteDomain == null || currentSiteDomain === '') {
+    displayLabel = 'Worst site';
+  } else {
+    displayLabel = formatSiteDisplayName(currentSiteDomain);
+  }
+  const isAllSitesSelected = summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES;
+  const isWorstSelected =
+    summarySelectedDomain == null || summarySelectedDomain === '';
 
   const wrap = document.createElement('div');
   wrap.className = 'feed-filter-dropdown site-summary-dropdown';
@@ -443,7 +855,7 @@ function buildSiteSummaryDropdown(container) {
   trigger.setAttribute('aria-expanded', 'false');
   trigger.id = 'site-summary-dropdown-trigger';
   trigger.innerHTML =
-    '<span class="feed-filter-dropdown-label" id="site-summary-dropdown-label">Site: ' +
+    '<span class="feed-filter-dropdown-label" id="site-summary-dropdown-label">SITE: ' +
     escapeAttr(displayLabel) +
     '</span><span class="feed-filter-dropdown-chevron" aria-hidden="true">▼</span>';
 
@@ -451,11 +863,27 @@ function buildSiteSummaryDropdown(container) {
   panel.className = 'feed-filter-dropdown-panel';
   panel.setAttribute('role', 'listbox');
 
+  const allSitesOpt = document.createElement('div');
+  allSitesOpt.className =
+    'feed-filter-dropdown-option' + (isAllSitesSelected ? ' is-selected' : '');
+  allSitesOpt.setAttribute('role', 'option');
+  allSitesOpt.setAttribute('data-value', SUMMARY_SCOPE_ALL_SITES);
+  allSitesOpt.textContent = 'All sites (session)';
+  allSitesOpt.addEventListener('click', () => {
+    summarySelectedDomain = SUMMARY_SCOPE_ALL_SITES;
+    setOpen(false);
+    renderSiteSummary();
+  });
+  panel.appendChild(allSitesOpt);
+
   const worstOpt = document.createElement('div');
-  worstOpt.className = 'feed-filter-dropdown-option';
+  worstOpt.className =
+    'feed-filter-dropdown-option' + (!isAllSitesSelected && isWorstSelected ? ' is-selected' : '');
   worstOpt.setAttribute('role', 'option');
   worstOpt.setAttribute('data-value', '');
-  worstOpt.textContent = worstDomain ? 'Worst site (' + worstDomain + ')' : 'Worst site';
+  worstOpt.textContent = worstDomain
+    ? 'Worst site (' + formatSiteDisplayName(worstDomain) + ')'
+    : 'Worst site';
   worstOpt.addEventListener('click', () => {
     summarySelectedDomain = null;
     setOpen(false);
@@ -463,11 +891,14 @@ function buildSiteSummaryDropdown(container) {
   });
   panel.appendChild(worstOpt);
   domains.forEach(([domain]) => {
+    if (domain === SUMMARY_SCOPE_ALL_SITES) return;
     const opt = document.createElement('div');
-    opt.className = 'feed-filter-dropdown-option';
+    opt.className =
+      'feed-filter-dropdown-option' +
+      (!isAllSitesSelected && summarySelectedDomain === domain ? ' is-selected' : '');
     opt.setAttribute('role', 'option');
     opt.setAttribute('data-value', domain);
-    opt.textContent = domain === '_direct' ? 'Direct' : domain;
+    opt.textContent = formatSiteDisplayName(domain);
     opt.addEventListener('click', () => {
       summarySelectedDomain = domain;
       setOpen(false);
@@ -497,6 +928,11 @@ function buildSiteSummaryDropdown(container) {
 }
 
 function refreshSiteSummary() {
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+    currentSiteDomain = null;
+    renderSiteSummary();
+    return;
+  }
   getCurrentSiteDomain((domain) => {
     currentSiteDomain = domain;
     renderSiteSummary();
@@ -550,6 +986,342 @@ function applyFilters(requests) {
     }
     return true;
   });
+}
+
+/** Timeline: session-wide only when "All sites" is selected; otherwise current summary site (or worst site). */
+function getTimelineRequests() {
+  const filtered = applyFilters(feedRequests);
+  if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) return filtered;
+  const site = getSummaryTimelineSiteKey();
+  if (!site) return [];
+  return filtered.filter((r) => (r.initiator_domain || '_direct') === site);
+}
+
+const TIMELINE_CAT_CSS = {
+  behavioral: '--cat-behavioral',
+  fingerprinting: '--cat-fingerprint',
+  session_replay: '--cat-session-replay',
+  ad_network: '--cat-ad-network',
+  analytics: '--cat-analytics',
+  legitimate: '--cat-legitimate',
+  unclassified: '--cat-unclassified',
+};
+
+function getCategoryColorHex(cat) {
+  const prop = TIMELINE_CAT_CSS[cat] || '--cat-unclassified';
+  const s = getComputedStyle(document.documentElement).getPropertyValue(prop).trim();
+  return s || '#888888';
+}
+
+let timelineRaf = null;
+let timelineResizeObserver = null;
+
+function scheduleTimelineRender() {
+  if (typeof d3 === 'undefined') return;
+  if (timelineRaf) cancelAnimationFrame(timelineRaf);
+  timelineRaf = requestAnimationFrame(() => {
+    timelineRaf = null;
+    renderTimeline();
+  });
+}
+
+function formatTimelineClock(ms) {
+  const d = new Date(ms);
+  return d.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function timelineFindBinIndex(dataForStack, tMs) {
+  for (let i = 0; i < dataForStack.length; i++) {
+    const b = dataForStack[i];
+    if (tMs >= b.x0 && tMs <= b.x1) return i;
+  }
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < dataForStack.length; i++) {
+    const mid = (dataForStack[i].x0 + dataForStack[i].x1) / 2;
+    const d = Math.abs(mid - tMs);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** Hover + tooltip for timeline chart (transparent rect on top of chart). */
+function bindTimelinePointerInteractions(g, innerW, innerH, x, dataForStack, stackKeys) {
+  if (typeof d3 === 'undefined' || innerW < 2 || innerH < 2) return;
+  const tooltipEl = document.getElementById('specter-tooltip');
+  const crosshair = g
+    .append('line')
+    .attr('class', 'timeline-crosshair')
+    .attr('y1', 0)
+    .attr('y2', innerH)
+    .attr('stroke', 'var(--border-strong)')
+    .attr('stroke-width', 1)
+    .style('opacity', 0)
+    .style('pointer-events', 'none');
+
+  const overlay = g
+    .append('rect')
+    .attr('width', innerW)
+    .attr('height', innerH)
+    .attr('fill', 'transparent')
+    .style('cursor', 'crosshair')
+    .style('pointer-events', 'all');
+
+  overlay.on('mousemove', function (event) {
+    const [mx] = d3.pointer(event);
+    const tDate = x.invert(mx);
+    const tMs = tDate.getTime();
+    const idx = timelineFindBinIndex(dataForStack, tMs);
+    const bin = dataForStack[idx];
+    const cx = x(new Date((bin.x0 + bin.x1) / 2));
+    crosshair.attr('x1', cx).attr('x2', cx).style('opacity', 1);
+
+    if (tooltipEl) {
+      const lines = [formatTimelineClock(bin.x0) + ' – ' + formatTimelineClock(bin.x1)];
+      let any = false;
+      for (const k of stackKeys) {
+        const n = bin[k] || 0;
+        if (n > 0) {
+          lines.push(categoryLabel(k) + ': ' + n);
+          any = true;
+        }
+      }
+      if (!any) lines.push('No tracker events in this interval.');
+      tooltipEl.textContent = lines.join('\n');
+      tooltipEl.setAttribute('aria-hidden', 'false');
+      tooltipEl.classList.add('is-visible');
+      const pad = 12;
+      let left = event.clientX + pad;
+      let top = event.clientY + pad;
+      requestAnimationFrame(() => {
+        const tw = tooltipEl.offsetWidth;
+        const th = tooltipEl.offsetHeight;
+        if (left + tw > window.innerWidth - 8) left = event.clientX - tw - pad;
+        if (top + th > window.innerHeight - 8) top = event.clientY - th - pad;
+        tooltipEl.style.left = left + 'px';
+        tooltipEl.style.top = top + 'px';
+      });
+    }
+  });
+
+  overlay.on('mouseleave', function () {
+    crosshair.style('opacity', 0);
+    if (tooltipEl) {
+      tooltipEl.classList.remove('is-visible');
+      tooltipEl.setAttribute('aria-hidden', 'true');
+    }
+  });
+}
+
+function renderTimeline() {
+  const root = document.getElementById('timeline-root');
+  if (!root) return;
+
+  if (typeof d3 === 'undefined') {
+    root.innerHTML =
+      '<p class="timeline-empty">Run <code>npm run bundle-libs</code> for the timeline.</p>';
+    return;
+  }
+
+  const requests = getTimelineRequests();
+  root.textContent = '';
+
+  if (requests.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'timeline-empty';
+    const globalTimeline = summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES;
+    const anyFiltered = applyFilters(feedRequests).length > 0;
+    if (feedRequests.length === 0) {
+      p.textContent = 'Start a session and capture requests to see the timeline.';
+    } else if (!globalTimeline && anyFiltered) {
+      p.textContent = 'No requests for the selected site match the current feed filters.';
+    } else {
+      p.textContent = 'No requests match the current filters.';
+    }
+    root.appendChild(p);
+    return;
+  }
+
+  const times = requests.map((r) => r.captured_at).filter((t) => t != null && !Number.isNaN(t));
+  if (times.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'timeline-empty';
+    p.textContent = 'No timing data for filtered requests.';
+    root.appendChild(p);
+    return;
+  }
+
+  let tMin = d3.min(times);
+  let tMax = d3.max(times);
+  if (tMin === tMax) {
+    tMin -= 800;
+    tMax += 800;
+  }
+
+  const layer = document.getElementById('dashboard-timeline-layer');
+  const stack = document.getElementById('dashboard-bottom-stack');
+  let zoneMax = 260;
+  if (stack) {
+    const raw = getComputedStyle(stack).getPropertyValue('--bottom-zone-height').trim();
+    const n = parseInt(raw, 10);
+    if (!Number.isNaN(n) && n > 0) zoneMax = n;
+  }
+  const boxW = Math.max(root.clientWidth || 0, layer ? layer.clientWidth : 0, 240);
+  const boxH = Math.max(root.clientHeight || 0, layer ? layer.clientHeight : 0, 120);
+  const margin = { top: 8, right: 10, bottom: 26, left: 38 };
+  const width = Math.max(240, boxW);
+  const height = Math.max(120, Math.min(zoneMax, boxH));
+  const innerW = Math.max(1, width - margin.left - margin.right);
+  const innerH = Math.max(1, height - margin.top - margin.bottom);
+
+  const binCount = Math.min(48, Math.max(10, Math.floor(innerW / 22)));
+  const binGen = d3
+    .bin()
+    .domain([tMin, tMax])
+    .thresholds(binCount)
+    .value((d) => d.captured_at);
+  const bins = binGen(requests);
+
+  const stackKeys = CATEGORIES.slice();
+  const dataForStack = bins.map((bin) => {
+    const row = { x0: bin.x0, x1: bin.x1 };
+    for (const k of stackKeys) row[k] = 0;
+    for (const r of bin) {
+      const c = r.category || 'unclassified';
+      if (row[c] != null) row[c] += 1;
+      else row.unclassified += 1;
+    }
+    return row;
+  });
+
+  const layers = d3.stack().keys(stackKeys)(dataForStack);
+  const maxY = d3.max(layers, (layer) => d3.max(layer, (d) => d[1])) || 1;
+
+  const x = d3
+    .scaleTime()
+    .domain([new Date(tMin), new Date(tMax)])
+    .range([0, innerW]);
+  const y = d3
+    .scaleLinear()
+    .domain([0, maxY])
+    .nice()
+    .range([innerH, 0]);
+
+  const svg = d3
+    .select(root)
+    .append('svg')
+    .attr('width', width)
+    .attr('height', height)
+    .attr('class', 'timeline-svg')
+    .attr('role', 'img')
+    .attr(
+      'aria-label',
+      'Stacked chart of tracker requests over time for the current feed filters. Hover for per-interval counts.'
+    );
+
+  const g = svg.append('g').attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
+
+  const gridG = g.append('g').attr('class', 'timeline-grid');
+  gridG
+    .call(
+      d3
+        .axisLeft(y)
+        .ticks(5)
+        .tickSize(-innerW)
+        .tickFormat('')
+    )
+    .selectAll('line')
+    .attr('stroke', 'var(--border-subtle)');
+  gridG.select('.domain').remove();
+  gridG.attr('pointer-events', 'none');
+
+  const area = d3
+    .area()
+    .curve(d3.curveLinear)
+    .x0((d) => x(new Date(d.data.x0)))
+    .x1((d) => x(new Date(d.data.x1)))
+    .y0((d) => y(d[0]))
+    .y1((d) => y(d[1]));
+
+  layers.forEach((layer) => {
+    const cat = layer.key;
+    const baseHex = getCategoryColorHex(cat);
+    const col = d3.color(baseHex);
+    if (col) col.opacity = 0.68;
+    const fill = col ? col.formatRgb() : baseHex;
+    g.append('path')
+      .attr('class', 'timeline-layer')
+      .attr('d', area(layer))
+      .attr('fill', fill)
+      .attr('stroke', baseHex)
+      .attr('stroke-width', 1)
+      .attr('stroke-opacity', 0.95)
+      .attr('pointer-events', 'none');
+  });
+
+  if (sessionStartTime != null && sessionStartTime >= tMin && sessionStartTime <= tMax) {
+    const xS = x(new Date(sessionStartTime));
+    g.append('line')
+      .attr('class', 'timeline-marker-session')
+      .attr('x1', xS)
+      .attr('x2', xS)
+      .attr('y1', 0)
+      .attr('y2', innerH)
+      .attr('stroke', 'var(--status-info)')
+      .attr('stroke-dasharray', '4 3')
+      .attr('stroke-width', 1)
+      .attr('pointer-events', 'none');
+    g.append('text')
+      .attr('class', 'timeline-marker-label')
+      .attr('x', xS + 4)
+      .attr('y', 11)
+      .attr('fill', 'var(--text-muted)')
+      .attr('font-size', '10px')
+      .attr('font-family', 'var(--font-mono)')
+      .attr('pointer-events', 'none')
+      .text('SESSION');
+  }
+
+  const tf = d3.timeFormat('%H:%M:%S');
+  const axisX = g
+    .append('g')
+    .attr('transform', 'translate(0,' + innerH + ')')
+    .attr('class', 'timeline-axis-x')
+    .call(d3.axisBottom(x).ticks(Math.min(6, binCount)).tickFormat(tf));
+  axisX
+    .selectAll('text')
+    .attr('fill', 'var(--text-muted)')
+    .style('font-family', 'var(--font-mono)')
+    .style('font-size', '10px');
+  axisX.attr('pointer-events', 'none');
+
+  const axisY = g.append('g').attr('class', 'timeline-axis-y').call(d3.axisLeft(y).ticks(5));
+  axisY
+    .selectAll('text')
+    .attr('fill', 'var(--text-muted)')
+    .style('font-family', 'var(--font-mono)')
+    .style('font-size', '10px');
+  axisY.attr('pointer-events', 'none');
+
+  bindTimelinePointerInteractions(g, innerW, innerH, x, dataForStack, stackKeys);
+}
+
+function initTimelineResizeObserver() {
+  const root = document.getElementById('timeline-root');
+  const layer = document.getElementById('dashboard-timeline-layer');
+  if ((!root && !layer) || typeof ResizeObserver === 'undefined') return;
+  if (timelineResizeObserver) timelineResizeObserver.disconnect();
+  timelineResizeObserver = new ResizeObserver(() => scheduleTimelineRender());
+  if (root) timelineResizeObserver.observe(root);
+  if (layer) timelineResizeObserver.observe(layer);
 }
 
 function groupByDomainCategory(requests) {
@@ -761,44 +1533,48 @@ function renderFeedRows(filtered, animateLast) {
 }
 
 function renderFeed(animateLast = false) {
-  const filtered = applyFilters(feedRequests);
-  const list = document.getElementById('feed-list');
-  const emptyEl = document.getElementById('feed-empty');
-  const emptyText = document.getElementById('feed-empty-text');
+  try {
+    const filtered = applyFilters(feedRequests);
+    const list = document.getElementById('feed-list');
+    const emptyEl = document.getElementById('feed-empty');
+    const emptyText = document.getElementById('feed-empty-text');
 
-  const noRequests = feedRequests.length === 0;
-  const noMatch = filtered.length === 0;
+    const noRequests = feedRequests.length === 0;
+    const noMatch = filtered.length === 0;
 
-  /* Show empty only when there’s nothing to show; keep feed visible when stopped if we have data */
-  if (noRequests) {
-    if (list) list.style.display = 'none';
-    if (emptyEl) emptyEl.style.display = 'flex';
-    if (emptyText) emptyText.textContent = 'Start a session from the Specter popup to begin capturing requests.';
-    updateNewPill(false);
-    return;
-  }
-
-  if (noMatch) {
-    if (list) list.style.display = 'none';
-    if (emptyEl) emptyEl.style.display = 'flex';
-    if (emptyText) emptyText.textContent = 'NO TRACKERS MATCH';
-    updateNewPill(false);
-    return;
-  }
-
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (list) list.style.display = 'flex';
-  const pillEl = document.getElementById('feed-new-pill');
-  const pillCountEl = document.getElementById('feed-new-pill-count');
-  if (pillEl && pillCountEl) {
-    if (pendingNewCount > 0) {
-      pillEl.hidden = false;
-      pillCountEl.textContent = String(pendingNewCount);
-    } else {
-      pillEl.hidden = true;
+    /* Show empty only when there’s nothing to show; keep feed visible when stopped if we have data */
+    if (noRequests) {
+      if (list) list.style.display = 'none';
+      if (emptyEl) emptyEl.style.display = 'flex';
+      if (emptyText) emptyText.textContent = 'Start a session from the Specter popup to begin capturing requests.';
+      updateNewPill(false);
+      return;
     }
+
+    if (noMatch) {
+      if (list) list.style.display = 'none';
+      if (emptyEl) emptyEl.style.display = 'flex';
+      if (emptyText) emptyText.textContent = 'NO TRACKERS MATCH';
+      updateNewPill(false);
+      return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (list) list.style.display = 'flex';
+    const pillEl = document.getElementById('feed-new-pill');
+    const pillCountEl = document.getElementById('feed-new-pill-count');
+    if (pillEl && pillCountEl) {
+      if (pendingNewCount > 0) {
+        pillEl.hidden = false;
+        pillCountEl.textContent = String(pendingNewCount);
+      } else {
+        pillEl.hidden = true;
+      }
+    }
+    renderFeedRows(filtered, animateLast);
+  } finally {
+    scheduleTimelineRender();
   }
-  renderFeedRows(filtered, animateLast);
 }
 
 function updateNewPill(show) {
@@ -821,6 +1597,7 @@ function selectRequest(id) {
     panel.classList.remove('panel-detail--collapsed');
     grid.classList.add('panel-detail-open');
   }
+  renderDetailPanel();
   renderFeed(false);
 }
 
@@ -832,7 +1609,260 @@ function closeDetailPanel() {
     panel.classList.add('panel-detail--collapsed');
     grid.classList.remove('panel-detail-open');
   }
+  clearVtCountdown();
   renderFeed(false);
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatBytes(n) {
+  if (n == null || n === 0) return '0 B';
+  if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
+function renderDetailPanel() {
+  const contentEl = document.getElementById('detail-content');
+  if (!contentEl) return;
+
+  if (!selectedRequestId) {
+    contentEl.innerHTML = '<div class="detail-empty">Select a request to view details.</div>';
+    return;
+  }
+
+  const req = feedRequests.find((r) => r.id === selectedRequestId);
+  if (!req) {
+    contentEl.innerHTML = '<div class="detail-empty">Request not found.</div>';
+    return;
+  }
+
+  // --- Classifier section ---
+  const badgeClass = categoryToBadgeClass(req.category);
+  const badgeLabel = categoryLabel(req.category);
+  const confPct = ((req.confidence ?? 0) * 100).toFixed(0) + '%';
+
+  let fiHtml = '';
+  const fis = Array.isArray(req.feature_importances) ? req.feature_importances : [];
+  if (fis.length > 0) {
+    const maxImp = Math.max(...fis.map((f) => f.importance), 0.001);
+    fiHtml = fis.map((f) => {
+      const barW = Math.round((f.importance / maxImp) * 100);
+      return (
+        '<div class="detail-fi-row">' +
+        '<span class="detail-fi-label">' + escapeHtml(f.feature) + '</span>' +
+        '<div class="detail-fi-track"><div class="detail-fi-bar" style="width:' + barW + '%"></div></div>' +
+        '<span class="detail-fi-val">' + escapeHtml(f.importance.toFixed(2)) + '</span>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  const classifierHtml =
+    '<div class="detail-section">' +
+    '<div class="detail-section-hd">CLASSIFICATION</div>' +
+    '<div class="detail-classifier-top">' +
+    '<span class="feed-badge ' + badgeClass + '"><span class="feed-badge-dot"></span>' + escapeHtml(badgeLabel) + '</span>' +
+    '<span class="detail-conf">' + confPct + '</span>' +
+    '</div>' +
+    (fiHtml ? '<div class="detail-fi-list">' + fiHtml + '</div>' : '') +
+    '</div>';
+
+  // --- URL section ---
+  const fullUrl = req.url || '';
+  const urlHtml =
+    '<div class="detail-section">' +
+    '<div class="detail-section-hd">FULL URL</div>' +
+    '<div class="detail-url-wrap">' +
+    '<span class="detail-url-text">' + escapeHtml(fullUrl) + '</span>' +
+    '<button class="detail-copy-btn" id="detail-url-copy" type="button">COPY</button>' +
+    '</div>' +
+    '</div>';
+
+  // --- Response meta ---
+  const status = req.response_status || '—';
+  const size = formatBytes(req.response_size_bytes);
+  const ctype = req.content_type || '—';
+  const method = req.method || '—';
+  const metaHtml =
+    '<div class="detail-section">' +
+    '<div class="detail-section-hd">RESPONSE</div>' +
+    '<div class="detail-meta-grid">' +
+    '<span class="detail-meta-label">Status</span><span class="detail-meta-val">' + escapeHtml(String(status)) + '</span>' +
+    '<span class="detail-meta-label">Size</span><span class="detail-meta-val">' + escapeHtml(size) + '</span>' +
+    '<span class="detail-meta-label">Type</span><span class="detail-meta-val">' + escapeHtml(ctype) + '</span>' +
+    '<span class="detail-meta-label">Method</span><span class="detail-meta-val">' + escapeHtml(method) + '</span>' +
+    '</div>' +
+    '</div>';
+
+  // --- Headers ---
+  function buildHeadersSection(title, headersObj) {
+    const entries = Object.entries(headersObj || {});
+    if (entries.length === 0) return '';
+    const rows = entries.map(([k, v]) =>
+      '<div class="detail-kv-row">' +
+      '<span class="detail-kv-key">' + escapeHtml(k) + '</span>' +
+      '<span class="detail-kv-val">' + escapeHtml(v) + '</span>' +
+      '</div>'
+    ).join('');
+    return (
+      '<div class="detail-section">' +
+      '<div class="detail-section-hd">' + title + ' <span class="detail-section-count">(' + entries.length + ')</span></div>' +
+      '<div class="detail-kv-list">' + rows + '</div>' +
+      '</div>'
+    );
+  }
+
+  const reqHeadersHtml = buildHeadersSection('REQUEST HEADERS', req.request_headers);
+  const resHeadersHtml = buildHeadersSection('RESPONSE HEADERS', req.response_headers);
+
+  // --- VirusTotal section ---
+  const domain = req.domain || '';
+  const vtHtml =
+    '<div class="detail-section" id="detail-vt-section">' +
+    '<div class="detail-section-hd">DOMAIN REPUTATION</div>' +
+    '<div class="detail-vt-domain">' + escapeHtml(domain) + '</div>' +
+    '<button class="detail-vt-btn" id="detail-vt-btn" type="button">FETCH REPUTATION</button>' +
+    '<div class="detail-vt-result" id="detail-vt-result"></div>' +
+    '</div>';
+
+  contentEl.innerHTML = classifierHtml + urlHtml + metaHtml + reqHeadersHtml + resHeadersHtml + vtHtml;
+
+  // Bind copy button
+  const copyBtn = document.getElementById('detail-url-copy');
+  if (copyBtn && fullUrl) {
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(fullUrl).then(() => {
+        copyBtn.textContent = 'COPIED';
+        setTimeout(() => { copyBtn.textContent = 'COPY'; }, 1500);
+      });
+    });
+  }
+
+  // Bind VT button
+  const vtBtn = document.getElementById('detail-vt-btn');
+  if (vtBtn && domain) {
+    const now = Date.now();
+    const remaining = vtLastRequestTime > 0 ? Math.ceil((vtLastRequestTime + 15000 - now) / 1000) : 0;
+    if (remaining > 0) {
+      vtBtn.disabled = true;
+      startVtCountdown(remaining);
+    }
+    vtBtn.addEventListener('click', () => fetchVirusTotal(domain));
+  }
+}
+
+function clearVtCountdown() {
+  if (vtCountdownInterval) {
+    clearInterval(vtCountdownInterval);
+    vtCountdownInterval = null;
+  }
+}
+
+function startVtCountdown(seconds) {
+  clearVtCountdown();
+  let remaining = seconds;
+  const btn = document.getElementById('detail-vt-btn');
+  const resultEl = document.getElementById('detail-vt-result');
+  if (btn) btn.disabled = true;
+  if (resultEl) {
+    resultEl.className = 'detail-vt-result detail-vt-countdown';
+    resultEl.textContent = 'Rate limited — try again in ' + remaining + 's';
+  }
+  vtCountdownInterval = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearVtCountdown();
+      const b = document.getElementById('detail-vt-btn');
+      const r = document.getElementById('detail-vt-result');
+      if (b) b.disabled = false;
+      if (r) r.textContent = '';
+    } else {
+      const r = document.getElementById('detail-vt-result');
+      if (r) r.textContent = 'Rate limited — try again in ' + remaining + 's';
+    }
+  }, 1000);
+}
+
+async function fetchVirusTotal(domain) {
+  const btn = document.getElementById('detail-vt-btn');
+  const resultEl = document.getElementById('detail-vt-result');
+  if (!resultEl) return;
+
+  const { settings: s } = await chrome.storage.local.get('settings');
+  const apiKey = s?.virustotal_api_key || '';
+  if (!apiKey) {
+    resultEl.className = 'detail-vt-result detail-vt-result--no-key';
+    resultEl.textContent = 'No API key configured. Add your VirusTotal key in Settings.';
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  resultEl.className = 'detail-vt-result detail-vt-result--loading';
+  resultEl.textContent = 'Fetching…';
+
+  try {
+    const resp = await fetch('https://www.virustotal.com/api/v3/domains/' + encodeURIComponent(domain), {
+      headers: { 'x-apikey': apiKey },
+    });
+
+    if (resp.status === 429) {
+      vtLastRequestTime = Date.now();
+      startVtCountdown(60);
+      return;
+    }
+
+    if (!resp.ok) {
+      resultEl.className = 'detail-vt-result detail-vt-result--error';
+      resultEl.textContent = 'Error: ' + resp.status + ' ' + resp.statusText;
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    vtLastRequestTime = Date.now();
+    const data = await resp.json();
+    const stats = data?.data?.attributes?.last_analysis_stats || {};
+    const malicious = stats.malicious ?? 0;
+    const harmless = stats.harmless ?? 0;
+    const suspicious = stats.suspicious ?? 0;
+    const total = Object.values(stats).reduce((a, b) => a + b, 0);
+
+    resultEl.className = 'detail-vt-result';
+    resultEl.innerHTML =
+      '<div class="detail-vt-score-row">' +
+      '<div class="detail-vt-score">' +
+      '<span class="detail-vt-score-label">Malicious</span>&nbsp;' +
+      '<span class="detail-vt-score-val--malicious">' + malicious + '</span>' +
+      '</div>' +
+      '<div class="detail-vt-score">' +
+      '<span class="detail-vt-score-label">Suspicious</span>&nbsp;' +
+      '<span class="detail-vt-score-val--malicious">' + suspicious + '</span>' +
+      '</div>' +
+      '<div class="detail-vt-score">' +
+      '<span class="detail-vt-score-label">Harmless</span>&nbsp;' +
+      '<span class="detail-vt-score-val--harmless">' + harmless + '</span>' +
+      '</div>' +
+      '</div>' +
+      '<div style="color:var(--text-muted);margin-top:4px;">' + total + ' engines checked</div>';
+
+    // Re-enable after VT rate limit window (15s for free tier ~4 req/min)
+    setTimeout(() => {
+      const b = document.getElementById('detail-vt-btn');
+      if (b) b.disabled = false;
+    }, 15000);
+
+  } catch (err) {
+    resultEl.className = 'detail-vt-result detail-vt-result--error';
+    resultEl.textContent = 'Request failed. Check your connection.';
+    if (btn) btn.disabled = false;
+  }
 }
 
 function buildFilterBar() {
@@ -1358,6 +2388,7 @@ function setupTooltips() {
 
 function init() {
   setupTooltips();
+  setupFingerprintDrawer();
   buildFilterBar();
 
   hideSessionConfirmBar();
@@ -1368,6 +2399,10 @@ function init() {
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (fingerprintDrawerOpen) {
+        setFingerprintDrawerOpen(false);
+        return;
+      }
       const siteSummaryPanel = document.querySelector('#site-summary-dropdown .feed-filter-dropdown-panel');
       const categoryPanel = document.querySelector('#feed-category-dropdown .feed-filter-dropdown-panel');
       const tabPanelEl = document.querySelector('#feed-tab-dropdown .feed-filter-dropdown-panel');
@@ -1405,7 +2440,12 @@ function init() {
   updateFeedHeaderDot();
   updateStatus('Stopped');
   updateSessionButton(false);
+  initTimelineResizeObserver();
+  updateBottomViewToggleLabel();
   renderFeed(false);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => scheduleTimelineRender());
+  });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
@@ -1444,11 +2484,13 @@ function init() {
         }
         siteScores = res['scores:' + session.id] || {};
         refreshSiteSummary();
+        requestAnimationFrame(() => requestAnimationFrame(() => scheduleTimelineRender()));
       });
     } else {
       siteScores = {};
       currentSiteDomain = null;
       refreshSiteSummary();
+      requestAnimationFrame(() => requestAnimationFrame(() => scheduleTimelineRender()));
     }
   });
 
@@ -1512,16 +2554,32 @@ function init() {
         updateNewPill(true);
       }
       renderFeed(true);
+      if (fingerprintDrawerOpen) {
+        if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+          renderFingerprintingAlerts();
+        } else if (
+          currentSiteDomain &&
+          siteScores[currentSiteDomain] &&
+          (message.request.initiator_domain || '_direct') === currentSiteDomain
+        ) {
+          renderFingerprintingAlerts();
+        }
+      }
     } else if (message.type === 'score_update') {
       if (message.domain != null && message.score != null) {
         siteScores[message.domain] = message.score;
-        if (message.domain === currentSiteDomain) renderSiteSummary();
-        else getCurrentSiteDomain((domain) => {
-          if (domain !== currentSiteDomain) {
-            currentSiteDomain = domain;
-            renderSiteSummary();
-          }
-        });
+        if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
+          renderSiteSummary();
+        } else if (message.domain === currentSiteDomain) {
+          renderSiteSummary();
+        } else {
+          getCurrentSiteDomain((domain) => {
+            if (domain !== currentSiteDomain) {
+              currentSiteDomain = domain;
+              renderSiteSummary();
+            }
+          });
+        }
       }
     } else if (message.type === 'session_started') {
       hideSessionConfirmBar();
@@ -1539,6 +2597,7 @@ function init() {
       siteScores = {};
       summarySelectedDomain = null;
       lastRenderedScore = null;
+      setFingerprintDrawerOpen(false);
       startSessionTimer();
       updateFeedHeaderDot();
       updateStatus('Recording');

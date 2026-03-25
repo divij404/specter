@@ -61,29 +61,77 @@
       </div>
     </aside>
     <div class="dashboard-main-col">
-      <section class="panel panel-main">
-        <div class="panel-header panel-header--site-summary">
-          <span class="panel-header-title">SITE SUMMARY</span>
-          <div id="site-summary-site-dropdown" class="site-summary-dropdown-wrap"></div>
+      <div class="dashboard-main-col-body">
+        <section class="panel panel-main panel-main--site-summary">
+          <div class="panel-header panel-header--site-summary">
+            <span class="panel-header-title">SITE SUMMARY</span>
+            <div id="site-summary-site-dropdown" class="site-summary-dropdown-wrap"></div>
+          </div>
+          <div class="panel-content"><div id="site-summary-root"></div></div>
+        </section>
+      </div>
+      <div class="dashboard-bottom-panel">
+        <div class="dashboard-bottom-toolbar">
+          <span id="dashboard-bottom-toolbar-title" class="dashboard-bottom-toolbar-title">TIMELINE</span>
+          <span class="dashboard-bottom-toolbar-spacer" aria-hidden="true"></span>
+          <button
+            type="button"
+            class="bottom-view-toggle"
+            id="bottom-view-toggle"
+            aria-expanded="false"
+            aria-controls="fingerprint-drawer"
+          >
+            ▲ FINGERPRINTING
+          </button>
         </div>
-        <div class="panel-content"><div id="site-summary-root"></div></div>
-      </section>
-      <section class="panel panel-fingerprint">
-        <div class="panel-header">FINGERPRINTING ALERTS</div>
-        <div class="panel-content"><div id="fingerprint-alerts-root"></div></div>
-      </section>
+        <div id="dashboard-bottom-stack" class="dashboard-bottom-stack" data-view="timeline">
+        <div
+          id="dashboard-timeline-layer"
+          class="dashboard-bottom-layer dashboard-bottom-layer--timeline"
+          aria-hidden="false"
+        >
+          <div id="timeline-root" class="timeline-root"></div>
+        </div>
+        <div
+          id="fingerprint-drawer"
+          class="dashboard-bottom-layer dashboard-bottom-layer--fingerprint fingerprint-drawer"
+          aria-hidden="true"
+        >
+          <div class="fingerprint-drawer-panel">
+            <div class="fingerprint-drawer-header">
+              <div class="fingerprint-drawer-title-block">
+                <span id="fingerprint-drawer-heading" class="fingerprint-drawer-heading">FINGERPRINTING — —</span>
+              </div>
+              <button type="button" class="fingerprint-drawer-close" id="fingerprint-drawer-close" aria-label="Close fingerprinting panel">✕</button>
+            </div>
+            <div class="fingerprint-drawer-scroll">
+              <div id="fingerprint-signal-rows" class="fingerprint-signal-rows"></div>
+              <div class="fingerprint-entropy-row">
+                <span class="fingerprint-entropy-label">Entropy Score</span>
+                <div class="fingerprint-entropy-display">
+                  <span id="fingerprint-entropy-value" class="fingerprint-entropy-value entropy-value--low">0</span>
+                  <span class="fingerprint-entropy-suffix">/10</span>
+                </div>
+                <div id="fingerprint-entropy-tier" class="fingerprint-entropy-tier fingerprint-entropy-tier--low" aria-live="polite">LOW RISK</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
     </div>
     <aside class="panel panel-detail panel-detail--collapsed" id="panel-detail">
       <div class="panel-header">
-        <span>DETAIL</span>
-        <button type="button" class="panel-detail-close" id="detail-close" aria-label="Close">×</button>
+        <span class="panel-header-title">REQUEST DETAIL</span>
+        <button type="button" class="panel-detail-close" id="detail-close" aria-label="Close detail panel">✕</button>
       </div>
-      <div class="panel-content">
-        <div class="detail-placeholder" id="detail-placeholder">Select a request to view details.</div>
+      <div class="panel-content panel-detail-content" id="detail-content">
+        <div class="detail-empty">Select a request to view details.</div>
       </div>
     </aside>
   </main>
   <div id="specter-tooltip" class="specter-tooltip" role="tooltip" aria-hidden="true"></div>
+  <script src="lib/d3.min.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>
