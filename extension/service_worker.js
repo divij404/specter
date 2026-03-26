@@ -59,6 +59,41 @@ function extractETLDPlusOne(hostname) {
   return parts.slice(-2).join('.');
 }
 
+// Expanded tracking param list (~40 known params)
+const TRACKING_PARAMS = new Set([
+  'fbclid', 'gclid', 'gbraid', 'wbraid', 'msclkid', 'ttclid', 'twclid', 'li_fat_id',
+  '_ga', '_gid', '_fbp', '_fbc', '_gcl_au', '_gcl_aw', 'utm_source', 'utm_medium',
+  'utm_campaign', 'utm_term', 'utm_content', 'utm_id', 'dclid', 'epik',
+  'uid', 'cid', 'sid', 'vid', 'pid', 'rid', 'aid', 'fp',
+  'visitor_id', 'tracking_id', 'session_id', 'user_id', 'client_id',
+  '__hssc', '__hstc', '__hsfp', 'hubspotutk',
+  'mc_cid', 'mc_eid',
+  'igshid', 'rdt_cid',
+]);
+
+// Known CDN / infrastructure domains — strong legitimate signal
+const CDN_PATTERN = /cloudflare|fastly|akamai|akamaized|cloudfront|jsdelivr|unpkg|cdnjs|staticfiles|gstatic|googleapis|bootstrapcdn|cloudinary|amazonaws|ytimg|googlevideo|ggpht|ttvnw|jtvnw|twimg|fbcdn|cdninstagram|steamstatic|rbxcdn|discordapp/i;
+
+// Known tracker subdomains
+const TRACKER_SUBDOMAIN_PATTERN = /^(ads?|track(ing)?|pixel|beacon|analytics?|metrics?|collect|log|stat(s)?|telemetry|event(s)?|monitor|probe)\./i;
+
+// Known tracker path segments
+const TRACKER_PATH_PATTERN = /\/beacon|\/pixel|\/event(s)?|\/track(ing)?|\/collect|\/hit|\/ping|\/log|\/telemetry|\/probe|\/imp(ression)?|\/clk|\/click/i;
+
+// Session replay domains/paths
+const SESSION_REPLAY_DOMAIN = /fullstory|hotjar|logrocket|clarity\.ms|mouseflow|smartlook|inspectlet|luckyorange|crazyegg/i;
+const SESSION_REPLAY_PATH = /\/rec\/|\/recording|\/replay|\/fs\.js|\/hotjar|\/logrocket|\/clarity|\/hj\.|\/lr-/i;
+
+// Analytics domains/paths
+const ANALYTICS_DOMAIN = /google-analytics|googletagmanager|segment\.io|mixpanel|amplitude|heap(analytics)?|rudderstack|posthog|plausible|fathom|matomo|piwik|kissmetrics|woopra|chartbeat/i;
+const ANALYTICS_PATH = /\/ga\.js|\/gtag|\/analytics\.js|\/segment\.min|\/mixpanel|\/amplitude|\/heap|\/mp\.js|\/collect\b|\/j\.mp\b/i;
+
+// Fingerprinting paths
+const FINGERPRINT_PATH = /fingerprintjs|fingerprint\.js|fp\.js|fpjs|evercookie|\/canvas\b|\/webgl\b|\/audio_fp|clientjs/i;
+
+// Ad network domains/paths
+const AD_PATH = /\/ads?\/|\/adserver|\/openrtb|\/prebid|\/banner|\/adview|\/impression|\/dfp\//i;
+
 function extractFeatures(details) {
   let url;
   try {
@@ -66,104 +101,177 @@ function extractFeatures(details) {
   } catch {
     return null;
   }
-  const trackingParams = ['fbclid', 'gclid', '_ga', 'uid', 'cid', 'sid', 'fp', 'visitor_id', 'tracking_id'];
-  const params = [...url.searchParams.keys()];
+
   const initiatorDomain = details.initiator
     ? (() => {
-        try {
-          return extractETLDPlusOne(new URL(details.initiator).hostname);
-        } catch {
-          return '';
-        }
+        try { return extractETLDPlusOne(new URL(details.initiator).hostname); } catch { return ''; }
       })()
     : '';
 
+  const domain = extractETLDPlusOne(url.hostname);
+  const subdomain = url.hostname.replace(domain, '').replace(/\.$/, '');
+  const path = url.pathname;
+  const params = [...url.searchParams.keys()];
+  const ct = (getHeader(details.responseHeaders, 'content-type') || '').split(';')[0].trim().toLowerCase();
+  const size = getResponseSize(details.responseHeaders);
+  const reqHeaders = headersToObject(details.requestHeaders || []);
+  const resHeaders = headersToObject(details.responseHeaders || []);
+  const trackingParamCount = params.filter((p) => TRACKING_PARAMS.has(p.toLowerCase())).length;
+
   return {
+    // Identity
     url: details.url,
-    domain: extractETLDPlusOne(url.hostname),
+    domain,
     method: details.method || 'GET',
     initiator_domain: initiatorDomain,
     tab_id: details.tabId,
-    query_param_count: params.length,
-    has_tracking_params: params.some((p) => trackingParams.includes(p)),
-    url_length: details.url.length,
+
+    // Response
     response_status: details.statusCode || 0,
-    response_size_bytes: getResponseSize(details.responseHeaders),
-    content_type: (getHeader(details.responseHeaders, 'content-type') || '').split(';')[0].trim(),
+    response_size_bytes: size,
+    content_type: ct,
+
+    // Header flags
     has_set_cookie: !!getHeader(details.responseHeaders, 'set-cookie'),
     has_no_cache: (getHeader(details.responseHeaders, 'cache-control') || '').includes('no-store'),
     has_cors_header: !!getHeader(details.responseHeaders, 'access-control-allow-origin'),
+    has_referer_header: !!reqHeaders['referer'],
+    has_origin_header: !!reqHeaders['origin'],
+
+    // URL signals
+    url_length: details.url.length,
+    query_param_count: params.length,
+    tracking_param_count: trackingParamCount,
+    has_tracking_params: trackingParamCount > 0,
+    path_depth: path.split('/').filter(Boolean).length,
+    has_encoded_params: [...url.searchParams.values()].some(
+      (v) => v.length > 40 && /^[A-Za-z0-9+/=_-]{20,}$/.test(v)
+    ),
+
+    // Derived boolean signals (computed once, used by scorer)
+    is_third_party: !!initiatorDomain && domain !== initiatorDomain,
+    is_same_domain: !!initiatorDomain && domain === initiatorDomain,
+    subdomain_is_tracker: TRACKER_SUBDOMAIN_PATTERN.test(subdomain + '.'),
+    path_is_tracker: TRACKER_PATH_PATTERN.test(path),
+    is_tiny_response: size > 0 && size < 50,
+    is_small_image: size <= 500 && (ct.includes('image') || ct.includes('gif')),
+    loads_as_script: ct.includes('javascript') || ct.includes('ecmascript') || /\.(js|mjs)(\?|$)/i.test(path),
+    domain_is_cdn: CDN_PATTERN.test(url.hostname),
+    is_font_or_style: ct.includes('font') || ct.includes('css') || /\.(woff2?|ttf|otf|css)(\?|$)/i.test(path),
+    domain_matches_session_replay: SESSION_REPLAY_DOMAIN.test(url.hostname),
+    path_matches_session_replay: SESSION_REPLAY_PATH.test(path),
+    domain_matches_analytics: ANALYTICS_DOMAIN.test(url.hostname),
+    path_matches_analytics: ANALYTICS_PATH.test(path),
+    path_matches_fingerprint: FINGERPRINT_PATH.test(path),
+    path_matches_ad: AD_PATH.test(path),
+    in_blocklist: blocklistDomains.has(domain),
+
+    // Timing
     ms_since_nav_start: details.timeStamp - getNavStartTime(details.tabId),
-    request_headers: headersToObject(details.requestHeaders || []),
-    response_headers: headersToObject(details.responseHeaders || []),
+
+    // Raw headers for detail panel
+    request_headers: reqHeaders,
+    response_headers: resHeaders,
   };
 }
 
-const CATEGORIES = ['behavioral', 'fingerprinting', 'session_replay', 'ad_network', 'analytics', 'legitimate'];
-const FEATURE_NAMES = [
-  'query_param_count', 'has_tracking_params', 'url_length', 'response_status',
-  'response_size_bytes', 'has_set_cookie', 'has_no_cache', 'has_cors_header',
-  'ms_since_nav_start', 'content_type', 'has_referer', 'has_origin',
-  'path_segment_count', 'domain_parts', 'url_length_log', 'response_status_ok',
-];
-
-function getTopFeatureImportances(features, topN) {
-  const scores = [];
-  if (features.has_tracking_params) scores.push({ feature: 'has_tracking_params', importance: 0.4 });
-  if (features.response_size_bytes <= 100 && (features.content_type || '').includes('image')) scores.push({ feature: 'response_size_bytes', importance: 0.35 });
-  if (features.has_set_cookie) scores.push({ feature: 'has_set_cookie', importance: 0.3 });
-  if (features.query_param_count > 3) scores.push({ feature: 'query_param_count', importance: 0.25 });
-  if (blocklistDomains.has(features.domain)) scores.push({ feature: 'blocklist_domain', importance: 0.5 });
-  scores.sort((a, b) => b.importance - a.importance);
-  return scores.slice(0, topN);
-}
+const CATEGORIES = ['behavioral', 'fingerprinting', 'session_replay', 'ad_network', 'analytics', 'legitimate', 'unclassified'];
 
 /**
- * Rule-based classifier: same output shape as ML (category, confidence, feature_importances).
- * Uses blocklist + URL/header heuristics. No WASM/ONNX required.
+ * Weighted multi-signal scorer.
+ *
+ * Each rule pushes { category, signal, weight } into `contributions`.
+ * All rules run — no early exit. The category with the highest total score wins.
+ * Confidence is derived from the margin between winner and runner-up.
+ * feature_importances returns the actual signals that fired, sorted by weight.
  */
 function classifyRuleBased(features) {
   if (!features) return { category: 'unclassified', confidence: 0.0, feature_importances: [] };
-  const url = (features.url || '').toLowerCase();
-  const path = url.split('?')[0].toLowerCase();
-  const ct = (features.content_type || '').toLowerCase();
-  const size = features.response_size_bytes ?? 0;
-  const inBlocklist = blocklistDomains.has(features.domain);
 
-  // Session replay: known paths (FullStory, Hotjar, Clarity, LogRocket)
-  if (/\/rec\/|\/record|\/session|\/clarity|\/hotjar|\/logrocket|\/fs\.js/.test(path)) {
-    return { category: 'session_replay', confidence: 0.92, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // Analytics: ga, gtag, analytics, segment, mixpanel
-  if (/\/ga\.js|\/gtag|\/analytics|\/segment|\/mixpanel|\/mp\.js|\/collect\b/.test(path) || /google-analytics|googletagmanager/.test(url)) {
-    return { category: 'analytics', confidence: 0.88, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // Fingerprinting: fp, fingerprint, canvas, fingerprintjs
-  if (/fingerprint|fp\.js|\/canvas|\/fingerprintjs|evercookie/.test(path)) {
-    return { category: 'fingerprinting', confidence: 0.9, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // Blocklist match -> ad_network or behavioral
-  if (inBlocklist) {
-    return { category: 'ad_network', confidence: 0.85, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // Tracking params + small response (e.g. pixel)
-  if (features.has_tracking_params && size <= 200 && (ct.includes('image') || ct.includes('gif') || !ct)) {
-    return { category: 'behavioral', confidence: 0.82, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // Tracking params only
-  if (features.has_tracking_params) {
-    return { category: 'behavioral', confidence: 0.75, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // CDN / fonts / known benign
-  if (/\.(woff2?|ttf|otf|css|js)$/.test(path) || /cdn\.|cloudflare|googleapis|gstatic|jsdelivr|unpkg/.test(url)) {
-    return { category: 'legitimate', confidence: 0.9, feature_importances: getTopFeatureImportances(features, 3) };
-  }
-  // Cross-origin third-party with cookies
-  if (features.has_set_cookie && features.initiator_domain && features.domain !== features.initiator_domain) {
-    return { category: 'analytics', confidence: 0.5, feature_importances: getTopFeatureImportances(features, 3) };
+  const contributions = []; // { category, signal, weight }
+
+  function add(category, signal, weight) {
+    contributions.push({ category, signal, weight });
   }
 
-  return { category: 'legitimate', confidence: 0.5, feature_importances: getTopFeatureImportances(features, 3) };
+  // ── Session Replay ──────────────────────────────────────────────────────
+  if (features.domain_matches_session_replay)   add('session_replay', 'session_replay_domain',  0.90);
+  if (features.path_matches_session_replay)     add('session_replay', 'session_replay_path',    0.85);
+
+  // ── Fingerprinting ──────────────────────────────────────────────────────
+  if (features.path_matches_fingerprint)        add('fingerprinting', 'fingerprint_path',       0.90);
+  if (features.subdomain_is_tracker && features.loads_as_script && features.is_third_party)
+                                                add('fingerprinting', 'tracker_subdomain_script', 0.40);
+  if (features.has_cors_header && features.loads_as_script && features.is_third_party)
+                                                add('fingerprinting', 'cors_third_party_script', 0.25);
+
+  // ── Analytics ───────────────────────────────────────────────────────────
+  if (features.domain_matches_analytics)        add('analytics', 'analytics_domain',            0.88);
+  if (features.path_matches_analytics)          add('analytics', 'analytics_path',              0.82);
+  if (features.has_set_cookie && features.is_third_party && features.tracking_param_count >= 2)
+                                                add('analytics', 'cookie_third_party_tracked',  0.50);
+  if (features.has_set_cookie && features.is_third_party && features.has_referer_header)
+                                                add('analytics', 'cookie_with_referer',         0.35);
+
+  // ── Ad Network ──────────────────────────────────────────────────────────
+  if (features.in_blocklist)                    add('ad_network',  'blocklist_domain',           0.85);
+  if (features.path_matches_ad)                 add('ad_network',  'ad_path',                   0.70);
+  if (features.path_is_tracker && features.is_third_party && features.is_tiny_response)
+                                                add('ad_network',  'tracker_path_pixel',         0.65);
+  if (features.subdomain_is_tracker && features.has_tracking_params)
+                                                add('ad_network',  'tracker_subdomain_params',   0.50);
+
+  // ── Behavioral ──────────────────────────────────────────────────────────
+  if (features.tracking_param_count >= 3)       add('behavioral',  'many_tracking_params',       0.75);
+  if (features.tracking_param_count >= 1 && features.is_tiny_response)
+                                                add('behavioral',  'tracking_params_pixel',      0.80);
+  if (features.tracking_param_count >= 1 && features.is_small_image)
+                                                add('behavioral',  'tracking_params_image',      0.70);
+  if (features.path_is_tracker && features.has_referer_header)
+                                                add('behavioral',  'tracker_path_referer',       0.55);
+  if (features.has_set_cookie && features.is_third_party && features.path_depth >= 3)
+                                                add('behavioral',  'deep_third_party_cookie',    0.40);
+  if (features.tracking_param_count >= 1 && features.is_third_party)
+                                                add('behavioral',  'tracking_params_third_party', 0.45);
+  if (features.has_encoded_params && features.is_third_party)
+                                                add('behavioral',  'encoded_params_third_party', 0.40);
+
+  // ── Legitimate ──────────────────────────────────────────────────────────
+  if (features.is_same_domain)                  add('legitimate',  'same_domain_resource',       0.70);
+  if (features.domain_is_cdn)                   add('legitimate',  'cdn_domain',                 0.80);
+  if (features.is_font_or_style && !features.is_third_party)
+                                                add('legitimate',  'first_party_style_font',     0.65);
+  if (features.is_font_or_style && features.domain_is_cdn)
+                                                add('legitimate',  'cdn_style_font',             0.75);
+  if (features.response_status === 200 && features.is_same_domain)
+                                                add('legitimate',  'ok_same_domain',             0.30);
+
+  // ── Aggregate scores ────────────────────────────────────────────────────
+  const totals = {};
+  for (const { category, weight } of contributions) {
+    totals[category] = (totals[category] || 0) + weight;
+  }
+
+  const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+
+  // No signals fired → unclassified
+  if (sorted.length === 0) {
+    return { category: 'unclassified', confidence: 0.2, feature_importances: [] };
+  }
+
+  const [winnerCat, winnerScore] = sorted[0];
+  const runnerUpScore = sorted[1]?.[1] ?? 0;
+  const margin = winnerScore - runnerUpScore;
+  const confidence = Math.min(0.97, 0.50 + (margin / (winnerScore + 0.01)) * 0.47);
+
+  // Feature importances: signals that contributed to the winning category, by weight
+  const importances = contributions
+    .filter((c) => c.category === winnerCat)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 5)
+    .map((c) => ({ feature: c.signal, importance: +(c.weight.toFixed(2)) }));
+
+  return { category: winnerCat, confidence: +confidence.toFixed(3), feature_importances: importances };
 }
 
 async function classify(features) {
@@ -219,10 +327,15 @@ async function flushBuffer() {
   if (requestBuffer.length === 0) return;
   const sessionId = requestBuffer[0].session_id;
   const key = 'requests:' + sessionId;
-  const result = await chrome.storage.local.get(key);
-  const existing = result[key] || [];
-  await chrome.storage.local.set({ [key]: existing.concat(requestBuffer) });
-  requestBuffer = [];
+  try {
+    const result = await chrome.storage.local.get(key);
+    const existing = result[key] || [];
+    await chrome.storage.local.set({ [key]: existing.concat(requestBuffer) });
+    requestBuffer = [];
+  } catch (err) {
+    console.error('[Specter] flushBuffer failed:', err?.message || err);
+    // Don't clear buffer on failure so next flush retries
+  }
 }
 
 async function stopSession() {
@@ -259,11 +372,15 @@ async function stopSession() {
       worst_domain = s.domain || '';
     }
   }
+  const tracker_count = requests.filter(
+    (r) => r.category && r.category !== 'legitimate' && r.category !== 'unclassified'
+  ).length;
   const summary = {
     id: session.id,
     started_at: session.started_at,
     stopped_at: updates['session:current'].stopped_at,
     total_requests,
+    tracker_count,
     sites_visited,
     worst_domain: worst_domain || null,
     worst_score,

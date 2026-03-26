@@ -302,7 +302,7 @@ function renderSiteSummary() {
     for (const r of requestsForSite) {
       if (r.response_size_bytes != null) dataVolumeBytes += r.response_size_bytes;
     }
-    dataVolumeKB = (dataVolumeBytes / 1024).toFixed(1);
+    dataVolumeKB = dataVolumeBytes > 0 ? (dataVolumeBytes / 1024).toFixed(1) + ' KB' : '—';
   } else {
     totalRequests = score.total_requests ?? 0;
     uniqueTrackers = score.unique_tracker_domains ?? 0;
@@ -310,27 +310,43 @@ function renderSiteSummary() {
     for (const r of requestsForSite) {
       if (r.response_size_bytes != null) dataVolumeBytes += r.response_size_bytes;
     }
-    dataVolumeKB = (dataVolumeBytes / 1024).toFixed(1);
+    dataVolumeKB = dataVolumeBytes > 0 ? (dataVolumeBytes / 1024).toFixed(1) + ' KB' : '—';
   }
 
-  const domainByCount = new Map();
-  const domainUrls = new Map();
-  for (const r of requestsForSite) {
-    if (r.category === 'legitimate' || r.category === 'unclassified') continue;
-    const d = r.domain || '';
-    domainByCount.set(d, (domainByCount.get(d) || 0) + 1);
-    if (r.url) {
-      let urls = domainUrls.get(d);
-      if (!urls) {
-        urls = new Set();
-        domainUrls.set(d, urls);
+  // Worst offenders: for site-specific view use the complete stored siteScore arrays
+  // (immune to the 200-row feed cap). For all-sites view, scan the capped feedRequests.
+  // Each entry: { domain, category, barPct }
+  let worstOffenders = [];
+  if (!isAllSitesScope && score) {
+    const PRIORITY = [
+      { key: 'unique_fingerprinting', cat: 'fingerprinting', barPct: 100 },
+      { key: 'unique_behavioral',     cat: 'behavioral',     barPct: 80  },
+      { key: 'unique_ad_network',     cat: 'ad_network',     barPct: 60  },
+      { key: 'unique_analytics',      cat: 'analytics',      barPct: 40  },
+    ];
+    for (const { key, cat, barPct } of PRIORITY) {
+      for (const d of (score[key] || [])) {
+        worstOffenders.push({ domain: d, category: cat, barPct });
       }
-      urls.add(r.url);
     }
+    if (score.has_session_replay) {
+      worstOffenders.unshift({ domain: currentSiteDomain || '(this site)', category: 'session_replay', barPct: 100 });
+    }
+    worstOffenders = worstOffenders.slice(0, 4);
+  } else {
+    // All-sites: scan feedRequests (best effort, may be capped)
+    const domainByCount = new Map();
+    for (const r of requestsForSite) {
+      if (r.category === 'legitimate' || r.category === 'unclassified') continue;
+      const d = r.domain || '';
+      domainByCount.set(d, { count: (domainByCount.get(d)?.count || 0) + 1, category: r.category || 'unclassified' });
+    }
+    const maxCount = Math.max(1, ...Array.from(domainByCount.values()).map((v) => v.count));
+    worstOffenders = Array.from(domainByCount.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 4)
+      .map(([domain, { count, category }]) => ({ domain, category, barPct: Math.max(4, (count / maxCount) * 100), count }));
   }
-  const worstOffenders = Array.from(domainByCount.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
 
   const categoryCounts = {};
   for (const c of CATEGORIES) categoryCounts[c] = 0;
@@ -390,7 +406,7 @@ function renderSiteSummary() {
     '</div></div>' +
     '<div class="site-summary-stat-box"><div class="label">DATA VOLUME</div><div class="value">' +
     escapeAttr(dataVolumeKB) +
-    ' KB</div></div>';
+    '</div></div>';
 
   const kpis = document.createElement('div');
   kpis.className = 'site-summary-kpis';
@@ -403,23 +419,14 @@ function renderSiteSummary() {
   worstWrap.innerHTML = '<div class="site-summary-worst-title">WORST OFFENDERS</div>';
   const worstList = document.createElement('ul');
   worstList.className = 'site-summary-worst-list';
-  const maxCount = worstOffenders.length > 0 ? worstOffenders[0][1] : 1;
-  const maxUrlsInTooltip = 10;
-  for (const [dom, count] of worstOffenders) {
+  for (const { domain: dom, category, barPct, count } of worstOffenders) {
     const li = document.createElement('li');
     li.className = 'site-summary-worst-item';
-    const urls = domainUrls.get(dom);
-    if (urls && urls.size > 0) {
-      const urlList = Array.from(urls);
-      const show = urlList.slice(0, maxUrlsInTooltip);
-      const tooltipText = show.join('\n') + (urlList.length > maxUrlsInTooltip ? '\n… and ' + (urlList.length - maxUrlsInTooltip) + ' more' : '');
-      li.setAttribute('data-tooltip', tooltipText);
-    }
     const barWrap = document.createElement('span');
     barWrap.className = 'site-summary-worst-bar-wrap';
     const bar = document.createElement('span');
     bar.className = 'site-summary-worst-bar';
-    bar.style.width = Math.max(4, (count / maxCount) * 100) + '%';
+    bar.style.width = barPct + '%';
     barWrap.appendChild(bar);
     const label = document.createElement('span');
     label.className = 'site-summary-worst-label';
@@ -427,7 +434,9 @@ function renderSiteSummary() {
     label.setAttribute('title', dom);
     const badge = document.createElement('span');
     badge.className = 'site-summary-worst-badge';
-    badge.textContent = count + ' request' + (count !== 1 ? 's' : '');
+    badge.textContent = count != null
+      ? (count + ' request' + (count !== 1 ? 's' : ''))
+      : categoryLabel(category);
     li.appendChild(barWrap);
     li.appendChild(label);
     li.appendChild(badge);
@@ -2702,6 +2711,7 @@ function init() {
   setupTooltips();
   setupFingerprintDrawer();
   buildFilterBar();
+  initHistoryOverlay();
 
   hideSessionConfirmBar();
 
@@ -2736,6 +2746,8 @@ function init() {
         if (wrap) wrap.setAttribute('data-open', 'false');
         const trig = wrap && wrap.querySelector('.feed-filter-dropdown-trigger');
         if (trig) trig.setAttribute('aria-expanded', 'false');
+      } else if (historyOverlayOpen()) {
+        closeHistoryOverlay();
       } else {
         closeDetailPanel();
       }
@@ -2965,6 +2977,216 @@ function init() {
       renderFeed(false);
     }
   });
+}
+
+// ─── History overlay ──────────────────────────────────────────────────────────
+
+function historyOverlayOpen() {
+  const el = document.getElementById('history-overlay');
+  return el ? el.classList.contains('history-overlay--open') : false;
+}
+
+function openHistoryOverlay() {
+  const el = document.getElementById('history-overlay');
+  if (!el) return;
+  el.classList.add('history-overlay--open');
+  el.setAttribute('aria-hidden', 'false');
+  renderHistoryOverlay();
+}
+
+function closeHistoryOverlay() {
+  const el = document.getElementById('history-overlay');
+  if (!el) return;
+  el.classList.remove('history-overlay--open');
+  el.setAttribute('aria-hidden', 'true');
+}
+
+function formatHistoryDate(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatHistoryDuration(startTs, stopTs) {
+  if (!startTs || !stopTs) return '—';
+  const ms = stopTs - startTs;
+  if (ms < 0) return '—';
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+async function renderHistoryOverlay() {
+  const body = document.getElementById('history-overlay-body');
+  if (!body) return;
+
+  const result = await chrome.storage.local.get('sessions:history');
+  const sessions = (result['sessions:history'] || []).slice().reverse(); // newest first
+
+  if (sessions.length === 0) {
+    body.innerHTML = `
+      <div class="history-empty">
+        <div class="history-empty-icon">⧗</div>
+        <div class="history-empty-title">NO SESSIONS YET</div>
+        <div class="history-empty-hint">Complete a session to see it recorded here.</div>
+      </div>`;
+    return;
+  }
+
+  const rows = sessions.map((s, i) => {
+    const worstScore = s.worst_score ?? 100;
+    const worstClass = worstScore < 40 ? ' history-td-worst--bad' : '';
+    const worstLabel = s.worst_domain
+      ? `${s.worst_domain} (${worstScore})`
+      : `${worstScore}/100`;
+    const trackerCount = s.tracker_count ?? '—';
+    return `
+      <tr data-session-idx="${i}" data-session-id="${s.id}">
+        <td class="history-td-date">${formatHistoryDate(s.started_at)}</td>
+        <td class="history-td-duration">${formatHistoryDuration(s.started_at, s.stopped_at)}</td>
+        <td class="history-td-sites td-right">${s.sites_visited ?? '—'}</td>
+        <td class="history-td-trackers td-right">${trackerCount}</td>
+        <td class="history-td-worst${worstClass}" title="${s.worst_domain || ''}">${worstLabel}</td>
+        <td>
+          <div class="history-row-actions">
+            <button type="button" class="history-action-btn history-export-btn" data-idx="${i}" title="Export summary JSON">SUMMARY</button>
+            <button type="button" class="history-action-btn history-full-export-btn" data-idx="${i}" title="Export full session data (requests + scores)">FULL</button>
+            <button type="button" class="history-action-btn history-action-btn--danger history-delete-btn" data-idx="${i}" title="Delete this session">DELETE</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  body.innerHTML = `
+    <table class="history-table">
+      <thead>
+        <tr>
+          <th>DATE / TIME</th>
+          <th>DURATION</th>
+          <th class="th-right">SITES</th>
+          <th class="th-right">TRACKERS</th>
+          <th>WORST DOMAIN</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="history-table-body">
+        ${rows}
+      </tbody>
+    </table>`;
+
+  // Bind summary export buttons
+  body.querySelectorAll('.history-export-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const session = sessions[idx];
+      if (!session) return;
+      const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `specter-summary-${session.id}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  });
+
+  // Bind full export buttons (summary + requests + scores)
+  body.querySelectorAll('.history-full-export-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const session = sessions[idx];
+      if (!session) return;
+
+      btn.textContent = '…';
+      btn.disabled = true;
+
+      try {
+        const res = await chrome.storage.local.get([
+          'requests:' + session.id,
+          'scores:' + session.id,
+        ]);
+        const payload = {
+          summary: session,
+          requests: res['requests:' + session.id] || [],
+          scores: res['scores:' + session.id] || {},
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `specter-full-${session.id}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } finally {
+        btn.textContent = 'FULL';
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // Bind delete buttons (inline confirm pattern)
+  body.querySelectorAll('.history-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (btn.dataset.confirm === 'pending') {
+        // Confirmed — delete
+        const idx = parseInt(btn.dataset.idx, 10);
+        const target = sessions[idx];
+        if (!target) return;
+        const res = await chrome.storage.local.get('sessions:history');
+        const all = res['sessions:history'] || [];
+        const updated = all.filter((s) => s.id !== target.id);
+        await chrome.storage.local.set({ 'sessions:history': updated });
+        // Also remove associated request/score data to free space
+        await chrome.storage.local.remove([
+          'requests:' + target.id,
+          'scores:' + target.id,
+        ]);
+        renderHistoryOverlay();
+      } else {
+        // First click — show confirm state
+        btn.textContent = 'CONFIRM?';
+        btn.dataset.confirm = 'pending';
+        btn.classList.add('history-action-btn--confirm');
+        btn.classList.remove('history-action-btn--danger');
+        // Auto-revert after 3s
+        setTimeout(() => {
+          if (btn.dataset.confirm === 'pending') {
+            btn.textContent = 'DELETE';
+            btn.dataset.confirm = '';
+            btn.classList.remove('history-action-btn--confirm');
+            btn.classList.add('history-action-btn--danger');
+          }
+        }, 3000);
+      }
+    });
+  });
+}
+
+function initHistoryOverlay() {
+  const navBtn = document.getElementById('history-nav-btn');
+  if (navBtn) {
+    navBtn.addEventListener('click', () => {
+      if (historyOverlayOpen()) {
+        closeHistoryOverlay();
+        navBtn.classList.remove('active');
+      } else {
+        openHistoryOverlay();
+        navBtn.classList.add('active');
+      }
+    });
+  }
+  const backBtn = document.getElementById('history-back-btn');
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      closeHistoryOverlay();
+      if (navBtn) navBtn.classList.remove('active');
+    });
+  }
 }
 
 if (document.readyState === 'loading') {

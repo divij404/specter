@@ -11,6 +11,13 @@
   <header class="dashboard-nav">
     <img src="icons/brand/logo.svg" alt="" class="specter-logo specter-logo--dashboard">
     <span class="dashboard-logo">SPECTER</span>
+    <span class="dashboard-nav-spacer"></span>
+    <button type="button" class="nav-icon-btn" id="history-nav-btn" aria-label="Session history" title="Session History">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="8" cy="8" r="6"/>
+        <polyline points="8,5 8,8 10.5,10.5"/>
+      </svg>
+    </button>
   </header>
   <main class="dashboard-grid">
     <aside class="panel panel-feed">
@@ -119,6 +126,22 @@
       </div>
     </aside>
   </main>
+  <!-- History overlay -->
+  <div id="history-overlay" class="history-overlay" aria-hidden="true">
+    <div class="history-overlay-header">
+      <button type="button" class="history-back-btn" id="history-back-btn" aria-label="Back to dashboard">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="10,3 5,8 10,13"/>
+        </svg>
+      </button>
+      <span class="history-overlay-title">SESSION HISTORY</span>
+      <span class="history-overlay-spacer"></span>
+    </div>
+    <div class="history-overlay-body" id="history-overlay-body">
+      <!-- rendered by JS -->
+    </div>
+  </div>
+
   <div id="specter-tooltip" class="specter-tooltip" role="tooltip" aria-hidden="true"></div>
   <script src="lib/d3.min.js"></script>
   <script src="dashboard.js"></script>
