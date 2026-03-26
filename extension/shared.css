@@ -24,6 +24,7 @@
   --text-primary: #E2E8F0;
   --text-secondary: #7A90A8;
   --text-muted: #3D5268;
+  --text-ghost: #3A4A52;
   --text-inverse: #080B0F;
 
   /* Brand Accent — muted steel blue to match dark terminal-industrial theme */
@@ -76,6 +77,7 @@
   --radius-lg: 10px;
 
   /* Type scale */
+  --text-2xs: 10px;
   --text-xs: 11px;
   --text-sm: 12px;
   --text-base: 13px;
@@ -97,7 +99,7 @@
 /* Styled tooltip — used by dashboard (and popup if needed) */
 .specter-tooltip {
   position: fixed;
-  z-index: 9999;
+  z-index: 200;
   padding: 6px 10px;
   max-width: 280px;
   max-height: 240px;

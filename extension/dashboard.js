@@ -57,6 +57,7 @@ let timerInterval = null;
 let pendingNewCount = 0;
 const FEED_CAP = 200;
 let lastGroupCounts = new Map();
+let expandedGroups = new Set();
 let clearFeedOnStart = false;
 let frozenElapsedSeconds = 0;
 
@@ -71,6 +72,8 @@ let siteScores = {};
 let currentSiteDomain = null;
 let lastRenderedScore = null;
 let summarySelectedDomain = null;
+/** True when summarySelectedDomain was set automatically by clicking a request (not by user dropdown choice). */
+let summaryAutoSelected = false;
 
 function extractETLDPlusOne(hostname) {
   if (!hostname) return '';
@@ -141,7 +144,23 @@ function getCurrentSiteDomain(callback) {
     callback(summarySelectedDomain);
     return;
   }
-  callback(getWorstSiteDomain());
+  // Prefer the active browser tab's domain if we have data for it; otherwise fall back to worst site.
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs && tabs[0];
+    if (tab && tab.url) {
+      try {
+        const hostname = new URL(tab.url).hostname;
+        const eTLD = extractETLDPlusOne(hostname);
+        if (eTLD && siteScores[eTLD]) {
+          callback(eTLD);
+          return;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    callback(getWorstSiteDomain());
+  });
 }
 
 /** Site key used for per-site timeline (null = none / empty chart). */
@@ -226,14 +245,31 @@ function renderSiteSummary() {
     if (scopeRequests.length === 0 && Object.keys(siteScores).length === 0) {
       root.className = 'site-summary-layout site-summary-layout--empty';
       root.innerHTML =
-        '<p class="site-summary-empty">No session data yet. Start browsing or choose a site.</p>';
+        '<div class="site-summary-empty-state">' +
+        '<svg class="site-summary-empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
+        '<circle cx="20" cy="20" r="4"/>' +
+        '<circle cx="20" cy="20" r="10" stroke-dasharray="3 3" opacity="0.5"/>' +
+        '<circle cx="20" cy="20" r="16" stroke-dasharray="3 3" opacity="0.25"/>' +
+        '</svg>' +
+        '<span class="site-summary-empty-title">No session data</span>' +
+        '<span class="site-summary-empty-hint">Click ▶ NEW SESSION above or start one from the popup, then browse.</span>' +
+        '</div>';
       renderFingerprintingAlerts();
       scheduleTimelineRender();
       return;
     }
   } else if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
     root.className = 'site-summary-layout site-summary-layout--empty';
-    root.innerHTML = '<p class="site-summary-empty">No site data yet. Start browsing to see summary.</p>';
+    root.innerHTML =
+      '<div class="site-summary-empty-state">' +
+      '<svg class="site-summary-empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
+      '<circle cx="20" cy="20" r="4"/>' +
+      '<circle cx="20" cy="20" r="10" stroke-dasharray="3 3" opacity="0.5"/>' +
+      '<circle cx="20" cy="20" r="16" stroke-dasharray="3 3" opacity="0.25"/>' +
+      '</svg>' +
+      '<span class="site-summary-empty-title">No data for this site</span>' +
+      '<span class="site-summary-empty-hint">Visit this site during an active session to see its tracker summary.</span>' +
+      '</div>';
     renderFingerprintingAlerts();
     scheduleTimelineRender();
     return;
@@ -506,7 +542,10 @@ function renderDoughnut(containerOrSelector, dataByCategory) {
   for (const seg of segments) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     const start = seg.startAngle - Math.PI / 2;
-    const end = start + seg.angle;
+    // Cap at 2π−ε: a perfect full-circle arc has coincident start/end points
+    // which SVG treats as a zero-length path (renders nothing).
+    const drawAngle = Math.min(seg.angle, 2 * Math.PI - 0.0005);
+    const end = start + drawAngle;
     const x0 = radius * Math.cos(start);
     const y0 = radius * Math.sin(start);
     const x1 = radius * Math.cos(end);
@@ -515,7 +554,7 @@ function renderDoughnut(containerOrSelector, dataByCategory) {
     const yi0 = innerRadius * Math.sin(start);
     const xi1 = innerRadius * Math.cos(end);
     const yi1 = innerRadius * Math.sin(end);
-    const large = seg.angle > Math.PI ? 1 : 0;
+    const large = drawAngle > Math.PI ? 1 : 0;
     const d =
       'M' + x0 + ',' + y0 +
       ' A' + radius + ',' + radius + ' 0 ' + large + ',1 ' + x1 + ',' + y1 +
@@ -668,85 +707,133 @@ function updateFingerprintDrawerHeaderSite() {
   el.classList.toggle('fingerprint-drawer-heading--muted', isMaskedSiteDisplayName(disp));
 }
 
-function setEntropyTierDisplay(entropy) {
-  const tierEl = document.getElementById('fingerprint-entropy-tier');
-  const valueEl = document.getElementById('fingerprint-entropy-value');
-  if (!tierEl || !valueEl) return;
+function entropyTierInfo(entropy) {
   const n = Math.max(0, Math.min(10, Number(entropy) || 0));
-  let text = 'LOW RISK';
-  let tierCls = 'fingerprint-entropy-tier fingerprint-entropy-tier--low';
-  let valueCls = 'fingerprint-entropy-value entropy-value--low';
-  if (n >= 7) {
-    text = 'HIGH RISK';
-    tierCls = 'fingerprint-entropy-tier fingerprint-entropy-tier--high';
-    valueCls = 'fingerprint-entropy-value entropy-value--high';
-  } else if (n >= 4) {
-    text = 'MODERATE';
-    tierCls = 'fingerprint-entropy-tier fingerprint-entropy-tier--mid';
-    valueCls = 'fingerprint-entropy-value entropy-value--mid';
-  }
-  tierEl.textContent = text;
-  tierEl.className = tierCls;
-  valueEl.className = valueCls;
+  if (n >= 7) return { label: 'HIGH RISK', colorCls: 'entropy-value--high', barCls: 'fp-risk-bar--high' };
+  if (n >= 4) return { label: 'MODERATE',  colorCls: 'entropy-value--mid',  barCls: 'fp-risk-bar--mid' };
+  return          { label: 'LOW RISK',   colorCls: 'entropy-value--low',  barCls: 'fp-risk-bar--low' };
+}
+
+function setEntropyTierDisplay(entropy) {
+  // No-op: entropy display is now fully rendered by renderFingerprintingAlerts.
 }
 
 function renderFingerprintingAlerts() {
   const rowsRoot = document.getElementById('fingerprint-signal-rows');
-  const entropyEl = document.getElementById('fingerprint-entropy-value');
-  if (!rowsRoot || !entropyEl) return;
+  if (!rowsRoot) return;
 
   updateFingerprintDrawerHeaderSite();
-
   rowsRoot.textContent = '';
 
+  const noSession = !currentSession || !currentSession.active;
+
+  // Empty state: no session running yet
+  if (noSession && feedRequests.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'fingerprint-panel-empty';
+    empty.innerHTML =
+      '<svg class="fingerprint-panel-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
+      '<path stroke-linecap="round" stroke-linejoin="round" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>' +
+      '<path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01" />' +
+      '</svg>' +
+      '<span class="fingerprint-panel-empty-title">No fingerprinting data</span>' +
+      '<span class="fingerprint-panel-empty-hint">Start a session and browse to detect fingerprinting signals.</span>';
+    rowsRoot.appendChild(empty);
+    return;
+  }
+
+  let fpRequests;
   if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
-    const globalReqs = getGlobalFingerprintAnalysisRequests();
-    const { byKey, entropy } = analyzeFingerprintSurfaceSignals(globalReqs);
-    for (const s of FP_SURFACE_SIGNALS) {
-      const { ok, domain } = byKey[s.key];
-      rowsRoot.appendChild(buildFingerprintSignalRow(s.label, ok, ok ? domain : null));
+    fpRequests = getGlobalFingerprintAnalysisRequests();
+  } else if (currentSiteDomain && siteScores[currentSiteDomain]) {
+    fpRequests = getSiteFingerprintAnalysisRequests(currentSiteDomain);
+  } else {
+    fpRequests = [];
+  }
+
+  const { byKey, entropy } = analyzeFingerprintSurfaceSignals(fpRequests);
+  const tier = entropyTierInfo(entropy);
+  const detected = FP_SURFACE_SIGNALS.filter((s) => byKey[s.key].ok);
+  const notDetected = FP_SURFACE_SIGNALS.filter((s) => !byKey[s.key].ok);
+  const barPct = Math.round((entropy / 10) * 100);
+
+  // --- Risk summary row ---
+  const riskRow = document.createElement('div');
+  riskRow.className = 'fp-risk-row';
+  riskRow.setAttribute('aria-live', 'polite');
+  riskRow.innerHTML =
+    '<div class="fp-risk-score">' +
+    '<span class="fp-risk-number ' + tier.colorCls + '">' + entropy + '</span>' +
+    '<span class="fp-risk-denom">/10</span>' +
+    '</div>' +
+    '<div class="fp-risk-meta">' +
+    '<span class="fp-risk-tier ' + tier.colorCls + '">' + tier.label + '</span>' +
+    '<div class="fp-risk-bar-track" aria-hidden="true">' +
+    '<div class="fp-risk-bar ' + tier.barCls + '" style="width:' + barPct + '%"></div>' +
+    '</div>' +
+    '<span class="fp-risk-count">' + detected.length + ' / ' + FP_SURFACE_SIGNALS.length + ' APIs detected</span>' +
+    '</div>';
+  rowsRoot.appendChild(riskRow);
+
+  // --- Divider ---
+  const divider = document.createElement('div');
+  divider.className = 'fp-signals-divider';
+  rowsRoot.appendChild(divider);
+
+  // --- Detected signals (full rows) ---
+  if (detected.length > 0) {
+    const detectedGroup = document.createElement('div');
+    detectedGroup.className = 'fingerprint-signal-group';
+    const groupLabel = document.createElement('span');
+    groupLabel.className = 'fingerprint-signal-group-label fingerprint-signal-group-label--detected';
+    groupLabel.textContent = 'DETECTED (' + detected.length + ')';
+    detectedGroup.appendChild(groupLabel);
+    for (const s of detected) {
+      const { domain } = byKey[s.key];
+      detectedGroup.appendChild(buildFingerprintSignalRow(s.label, true, domain));
     }
-    entropyEl.textContent = String(entropy);
-    setEntropyTierDisplay(entropy);
-    return;
+    rowsRoot.appendChild(detectedGroup);
   }
 
-  if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
-    for (const s of FP_SURFACE_SIGNALS) {
-      rowsRoot.appendChild(buildFingerprintSignalRow(s.label, false, null));
+  // --- Not detected signals (compact 2-column grid) ---
+  if (notDetected.length > 0) {
+    const notGroup = document.createElement('div');
+    notGroup.className = 'fingerprint-signal-group';
+    const groupLabel = document.createElement('span');
+    groupLabel.className = 'fingerprint-signal-group-label fingerprint-signal-group-label--clear';
+    groupLabel.textContent = 'NOT DETECTED (' + notDetected.length + ')';
+    notGroup.appendChild(groupLabel);
+    const grid = document.createElement('div');
+    grid.className = 'fingerprint-signal-grid';
+    for (const s of notDetected) {
+      const cell = document.createElement('div');
+      cell.className = 'fingerprint-signal-grid-cell';
+      cell.innerHTML =
+        '<span class="fingerprint-signal-indicator" aria-hidden="true" style="color:var(--text-ghost)">○</span>' +
+        '<span class="fingerprint-signal-label" style="color:var(--text-muted);font-weight:400">' + escapeHtml(s.label) + '</span>';
+      grid.appendChild(cell);
     }
-    entropyEl.textContent = '0';
-    setEntropyTierDisplay(0);
-    return;
+    notGroup.appendChild(grid);
+    rowsRoot.appendChild(notGroup);
   }
-
-  const siteReqs = getSiteFingerprintAnalysisRequests(currentSiteDomain);
-  const { byKey, entropy } = analyzeFingerprintSurfaceSignals(siteReqs);
-
-  for (const s of FP_SURFACE_SIGNALS) {
-    const { ok, domain } = byKey[s.key];
-    rowsRoot.appendChild(buildFingerprintSignalRow(s.label, ok, ok ? domain : null));
-  }
-
-  entropyEl.textContent = String(entropy);
-  setEntropyTierDisplay(entropy);
 }
 
 function buildFingerprintSignalRow(label, ok, domain) {
   const row = document.createElement('div');
-  row.className = 'fingerprint-signal-row';
+  row.className = 'fingerprint-signal-row' + (ok ? ' fingerprint-signal-row--ok' : ' fingerprint-signal-row--no');
+
+  const indicator = document.createElement('span');
+  indicator.className = 'fingerprint-signal-indicator';
+  indicator.setAttribute('aria-hidden', 'true');
+  indicator.textContent = ok ? '●' : '○';
+
   const lab = document.createElement('span');
   lab.className = 'fingerprint-signal-label';
   lab.textContent = label;
 
-  const wrap = document.createElement('div');
-  wrap.className = 'fingerprint-signal-status-wrap';
-  const st = document.createElement('span');
-  st.className =
-    'fingerprint-signal-status ' + (ok ? 'fingerprint-signal-status--ok' : 'fingerprint-signal-status--no');
-  st.textContent = ok ? '\u2713' : '\u2014';
-  st.setAttribute('aria-label', ok ? 'Detected' : 'Not detected');
-  wrap.appendChild(st);
+  const right = document.createElement('span');
+  right.className = 'fingerprint-signal-right';
+
   if (ok && domain != null && domain !== '') {
     const dom = document.createElement('span');
     const fd = formatSiteDisplayName(domain);
@@ -754,11 +841,18 @@ function buildFingerprintSignalRow(label, ok, domain) {
       'fingerprint-signal-domain fingerprint-signal-domain--ok' +
       (isMaskedSiteDisplayName(fd) ? ' fingerprint-signal-domain--masked' : '');
     dom.textContent = fd;
-    dom.title = String(domain);
-    wrap.appendChild(dom);
+    dom.setAttribute('data-tooltip', String(domain));
+    right.appendChild(dom);
+  } else if (ok) {
+    const chip = document.createElement('span');
+    chip.className = 'fingerprint-signal-chip fingerprint-signal-chip--ok';
+    chip.textContent = 'DETECTED';
+    right.appendChild(chip);
   }
+
+  row.appendChild(indicator);
   row.appendChild(lab);
-  row.appendChild(wrap);
+  row.appendChild(right);
   return row;
 }
 
@@ -769,7 +863,7 @@ function updateBottomViewToggleLabel() {
   const btn = document.getElementById('bottom-view-toggle');
   const toolbarTitle = document.getElementById('dashboard-bottom-toolbar-title');
   if (btn) {
-    btn.textContent = fingerprintDrawerOpen ? '\u25b2 TIMELINE' : '\u25b2 FINGERPRINTING';
+    btn.textContent = fingerprintDrawerOpen ? '\u25bc CLOSE' : '\u25b2 FINGERPRINTING';
     btn.setAttribute('aria-expanded', fingerprintDrawerOpen ? 'true' : 'false');
     btn.classList.toggle('bottom-view-toggle--active', fingerprintDrawerOpen);
   }
@@ -871,6 +965,7 @@ function buildSiteSummaryDropdown(container) {
   allSitesOpt.textContent = 'All sites (session)';
   allSitesOpt.addEventListener('click', () => {
     summarySelectedDomain = SUMMARY_SCOPE_ALL_SITES;
+    summaryAutoSelected = false;
     setOpen(false);
     renderSiteSummary();
   });
@@ -886,6 +981,7 @@ function buildSiteSummaryDropdown(container) {
     : 'Worst site';
   worstOpt.addEventListener('click', () => {
     summarySelectedDomain = null;
+    summaryAutoSelected = false;
     setOpen(false);
     renderSiteSummary();
   });
@@ -901,6 +997,7 @@ function buildSiteSummaryDropdown(container) {
     opt.textContent = formatSiteDisplayName(domain);
     opt.addEventListener('click', () => {
       summarySelectedDomain = domain;
+      summaryAutoSelected = false;
       setOpen(false);
       renderSiteSummary();
     });
@@ -1135,27 +1232,36 @@ function renderTimeline() {
   root.textContent = '';
 
   if (requests.length === 0) {
-    const p = document.createElement('p');
-    p.className = 'timeline-empty';
+    const wrap = document.createElement('div');
+    wrap.className = 'timeline-empty-state';
     const globalTimeline = summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES;
     const anyFiltered = applyFilters(feedRequests).length > 0;
+    let msg;
     if (feedRequests.length === 0) {
-      p.textContent = 'Start a session and capture requests to see the timeline.';
+      msg = 'Start a session and browse to see the request timeline.';
     } else if (!globalTimeline && anyFiltered) {
-      p.textContent = 'No requests for the selected site match the current feed filters.';
+      msg = 'No requests for the selected site match the current filters.';
     } else {
-      p.textContent = 'No requests match the current filters.';
+      msg = 'No requests match the current filters.';
     }
-    root.appendChild(p);
+    wrap.innerHTML =
+      '<svg class="timeline-empty-icon" viewBox="0 0 32 24" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">' +
+      '<rect x="1" y="14" width="5" height="9" rx="1"/>' +
+      '<rect x="9" y="9" width="5" height="14" rx="1" opacity="0.6"/>' +
+      '<rect x="17" y="5" width="5" height="18" rx="1" opacity="0.35"/>' +
+      '<rect x="25" y="11" width="5" height="12" rx="1" opacity="0.5"/>' +
+      '</svg>' +
+      '<span class="timeline-empty-text">' + msg + '</span>';
+    root.appendChild(wrap);
     return;
   }
 
   const times = requests.map((r) => r.captured_at).filter((t) => t != null && !Number.isNaN(t));
   if (times.length === 0) {
-    const p = document.createElement('p');
-    p.className = 'timeline-empty';
-    p.textContent = 'No timing data for filtered requests.';
-    root.appendChild(p);
+    const wrap = document.createElement('div');
+    wrap.className = 'timeline-empty-state';
+    wrap.innerHTML = '<span class="timeline-empty-text">No timing data for filtered requests.</span>';
+    root.appendChild(wrap);
     return;
   }
 
@@ -1166,23 +1272,26 @@ function renderTimeline() {
     tMax += 800;
   }
 
-  const layer = document.getElementById('dashboard-timeline-layer');
-  const stack = document.getElementById('dashboard-bottom-stack');
+  const tlLayer = document.getElementById('dashboard-timeline-layer');
+  const bottomStack = document.getElementById('dashboard-bottom-stack');
   let zoneMax = 260;
-  if (stack) {
-    const raw = getComputedStyle(stack).getPropertyValue('--bottom-zone-height').trim();
+  if (bottomStack) {
+    const raw = getComputedStyle(bottomStack).getPropertyValue('--bottom-zone-height').trim();
     const n = parseInt(raw, 10);
     if (!Number.isNaN(n) && n > 0) zoneMax = n;
   }
-  const boxW = Math.max(root.clientWidth || 0, layer ? layer.clientWidth : 0, 240);
-  const boxH = Math.max(root.clientHeight || 0, layer ? layer.clientHeight : 0, 120);
-  const margin = { top: 8, right: 10, bottom: 26, left: 38 };
+
+  // Reserve 20px at bottom for the category legend
+  const legendH = 20;
+  const boxW = Math.max(root.clientWidth || 0, tlLayer ? tlLayer.clientWidth : 0, 240);
+  const boxH = Math.max(root.clientHeight || 0, tlLayer ? tlLayer.clientHeight : 0, 120);
+  const margin = { top: 6, right: 12, bottom: 24, left: 34 };
   const width = Math.max(240, boxW);
-  const height = Math.max(120, Math.min(zoneMax, boxH));
+  const height = Math.max(100, Math.min(zoneMax, boxH) - legendH);
   const innerW = Math.max(1, width - margin.left - margin.right);
   const innerH = Math.max(1, height - margin.top - margin.bottom);
 
-  const binCount = Math.min(48, Math.max(10, Math.floor(innerW / 22)));
+  const binCount = Math.min(52, Math.max(12, Math.floor(innerW / 18)));
   const binGen = d3
     .bin()
     .domain([tMin, tMax])
@@ -1202,8 +1311,8 @@ function renderTimeline() {
     return row;
   });
 
-  const layers = d3.stack().keys(stackKeys)(dataForStack);
-  const maxY = d3.max(layers, (layer) => d3.max(layer, (d) => d[1])) || 1;
+  const stackedLayers = d3.stack().keys(stackKeys)(dataForStack);
+  const maxY = d3.max(stackedLayers, (lyr) => d3.max(lyr, (d) => d[1])) || 1;
 
   const x = d3
     .scaleTime()
@@ -1222,96 +1331,106 @@ function renderTimeline() {
     .attr('height', height)
     .attr('class', 'timeline-svg')
     .attr('role', 'img')
-    .attr(
-      'aria-label',
-      'Stacked chart of tracker requests over time for the current feed filters. Hover for per-interval counts.'
-    );
+    .attr('aria-label', 'Stacked bar chart of tracker requests over time.');
 
   const g = svg.append('g').attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
 
-  const gridG = g.append('g').attr('class', 'timeline-grid');
+  // Horizontal grid lines (integer count ticks only)
+  const yTicks = y.ticks(4).filter((t) => Number.isInteger(t));
+  const gridG = g.append('g').attr('class', 'timeline-grid').attr('pointer-events', 'none');
   gridG
-    .call(
-      d3
-        .axisLeft(y)
-        .ticks(5)
-        .tickSize(-innerW)
-        .tickFormat('')
-    )
     .selectAll('line')
-    .attr('stroke', 'var(--border-subtle)');
-  gridG.select('.domain').remove();
-  gridG.attr('pointer-events', 'none');
+    .data(yTicks)
+    .enter()
+    .append('line')
+    .attr('x1', 0)
+    .attr('x2', innerW)
+    .attr('y1', (d) => y(d))
+    .attr('y2', (d) => y(d))
+    .attr('stroke', 'var(--border-subtle)')
+    .attr('stroke-width', 1);
 
-  const area = d3
-    .area()
-    .curve(d3.curveLinear)
-    .x0((d) => x(new Date(d.data.x0)))
-    .x1((d) => x(new Date(d.data.x1)))
-    .y0((d) => y(d[0]))
-    .y1((d) => y(d[1]));
-
-  layers.forEach((layer) => {
-    const cat = layer.key;
+  // Stacked bars (rects) — cleaner than area paths
+  const barGap = binCount > 30 ? 0 : 1;
+  stackedLayers.forEach((lyr) => {
+    const cat = lyr.key;
     const baseHex = getCategoryColorHex(cat);
     const col = d3.color(baseHex);
-    if (col) col.opacity = 0.68;
+    if (col) col.opacity = 0.8;
     const fill = col ? col.formatRgb() : baseHex;
-    g.append('path')
-      .attr('class', 'timeline-layer')
-      .attr('d', area(layer))
+    g.selectAll(null)
+      .data(lyr)
+      .enter()
+      .append('rect')
+      .attr('class', 'timeline-bar')
+      .attr('x', (d) => x(new Date(d.data.x0)) + barGap)
+      .attr('width', (d) => Math.max(0, x(new Date(d.data.x1)) - x(new Date(d.data.x0)) - barGap * 2))
+      .attr('y', (d) => y(d[1]))
+      .attr('height', (d) => Math.max(0, y(d[0]) - y(d[1])))
       .attr('fill', fill)
-      .attr('stroke', baseHex)
-      .attr('stroke-width', 1)
-      .attr('stroke-opacity', 0.95)
       .attr('pointer-events', 'none');
   });
 
+  // Session start marker (line only — no text label cluttering the chart)
   if (sessionStartTime != null && sessionStartTime >= tMin && sessionStartTime <= tMax) {
     const xS = x(new Date(sessionStartTime));
     g.append('line')
-      .attr('class', 'timeline-marker-session')
-      .attr('x1', xS)
-      .attr('x2', xS)
-      .attr('y1', 0)
-      .attr('y2', innerH)
-      .attr('stroke', 'var(--status-info)')
-      .attr('stroke-dasharray', '4 3')
+      .attr('x1', xS).attr('x2', xS)
+      .attr('y1', 0).attr('y2', innerH)
+      .attr('stroke', 'var(--text-ghost)')
+      .attr('stroke-dasharray', '3 3')
       .attr('stroke-width', 1)
       .attr('pointer-events', 'none');
-    g.append('text')
-      .attr('class', 'timeline-marker-label')
-      .attr('x', xS + 4)
-      .attr('y', 11)
-      .attr('fill', 'var(--text-muted)')
-      .attr('font-size', '10px')
-      .attr('font-family', 'var(--font-mono)')
-      .attr('pointer-events', 'none')
-      .text('SESSION');
   }
 
+  // X axis (time labels)
   const tf = d3.timeFormat('%H:%M:%S');
   const axisX = g
     .append('g')
     .attr('transform', 'translate(0,' + innerH + ')')
     .attr('class', 'timeline-axis-x')
-    .call(d3.axisBottom(x).ticks(Math.min(6, binCount)).tickFormat(tf));
-  axisX
-    .selectAll('text')
+    .call(d3.axisBottom(x).ticks(Math.min(5, binCount)).tickFormat(tf).tickSize(3));
+  axisX.selectAll('text')
     .attr('fill', 'var(--text-muted)')
     .style('font-family', 'var(--font-mono)')
     .style('font-size', '10px');
+  axisX.select('.domain').attr('stroke', 'var(--border-default)');
+  axisX.selectAll('.tick line').attr('stroke', 'var(--border-default)');
   axisX.attr('pointer-events', 'none');
 
-  const axisY = g.append('g').attr('class', 'timeline-axis-y').call(d3.axisLeft(y).ticks(5));
-  axisY
-    .selectAll('text')
+  // Y axis (request counts — integers only)
+  const axisY = g.append('g').attr('class', 'timeline-axis-y')
+    .call(d3.axisLeft(y).tickValues(yTicks).tickFormat(d3.format('d')).tickSize(3));
+  axisY.selectAll('text')
     .attr('fill', 'var(--text-muted)')
     .style('font-family', 'var(--font-mono)')
     .style('font-size', '10px');
+  axisY.select('.domain').attr('stroke', 'var(--border-default)');
+  axisY.selectAll('.tick line').attr('stroke', 'var(--border-default)');
   axisY.attr('pointer-events', 'none');
 
   bindTimelinePointerInteractions(g, innerW, innerH, x, dataForStack, stackKeys);
+
+  // Category legend — only show categories that have at least one request
+  const activeCats = stackKeys.filter((k) => dataForStack.some((row) => row[k] > 0));
+  if (activeCats.length > 0) {
+    const legend = document.createElement('div');
+    legend.className = 'timeline-legend';
+    activeCats.forEach((cat) => {
+      const item = document.createElement('span');
+      item.className = 'timeline-legend-item';
+      const swatch = document.createElement('span');
+      swatch.className = 'timeline-legend-swatch';
+      swatch.style.background = getCategoryColorHex(cat);
+      const label = document.createElement('span');
+      label.className = 'timeline-legend-label';
+      label.textContent = categoryLabel(cat);
+      item.appendChild(swatch);
+      item.appendChild(label);
+      legend.appendChild(item);
+    });
+    root.appendChild(legend);
+  }
 }
 
 function initTimelineResizeObserver() {
@@ -1406,11 +1525,11 @@ function updateSessionButton(running) {
   const btn = document.getElementById('session-btn');
   if (!btn) return;
   if (running) {
-    btn.textContent = '■ STOP';
+    btn.textContent = '■ END SESSION';
     btn.classList.remove('stopped');
     btn.classList.add('running');
   } else {
-    btn.textContent = '▶ START';
+    btn.textContent = '▶ NEW SESSION';
     btn.classList.remove('running');
     btn.classList.add('stopped');
   }
@@ -1435,13 +1554,15 @@ function renderFeedRows(filtered, animateLast) {
     const req = isGroup ? item.requests[0] : item;
     const g = isGroup ? item : { id: req.id, requests: [req] };
     const isNew = animateLast && i === 0;
+    const conf = (req.confidence ?? 0);
+    const confClass = conf >= 0.8 ? ' feed-row--high-conf' : conf < 0.35 ? ' feed-row--low-conf' : '';
     const row = document.createElement('div');
-    row.className = 'feed-row' + (g.id === selectedRequestId ? ' feed-row--selected' : '') + (isNew ? ' feed-row-enter' : '');
+    row.className = 'feed-row' + (g.id === selectedRequestId ? ' feed-row--selected' : '') + confClass + (isNew ? ' feed-row-enter' : '');
     row.setAttribute('data-request-id', g.id);
     row.setAttribute('role', 'button');
     row.setAttribute('tabindex', '0');
 
-    const confPct = ((req.confidence ?? 0) * 100).toFixed(0);
+    const confPct = (conf * 100).toFixed(0);
     const badgeClass = categoryToBadgeClass(req.category);
     const count = g.requests.length | 0;
     const key = (req.domain || '') + '\0' + (req.category || '');
@@ -1489,6 +1610,11 @@ function renderFeedRows(filtered, animateLast) {
     }
 
     const badgeTip = categoryTooltip(req.category) || (categoryLabel(req.category) + ' — category');
+    const groupKey = (req.domain || '') + '\0' + (req.category || '');
+    const isExpanded = isGroup && count > 1 && expandedGroups.has(groupKey);
+    const expandBtnHtml = isGroup && count > 1
+      ? '<button type="button" class="feed-row-expand-btn" aria-label="' + (isExpanded ? 'Collapse' : 'Expand') + ' group" data-group-key="' + escapeAttr(groupKey) + '">' + (isExpanded ? '▼' : '▶') + '</button>'
+      : '';
     row.innerHTML =
       '<span class="feed-cell feed-cell-badge"><span class="feed-badge ' +
       badgeClass +
@@ -1500,6 +1626,7 @@ function renderFeedRows(filtered, animateLast) {
       '<span class="feed-cell feed-cell-domain"' + (req.domain ? ' data-tooltip="' + escapeAttr(req.domain) + '"' : '') + '>' +
       escapeAttr(req.domain || '—') +
       countHtml +
+      expandBtnHtml +
       '</span>' +
       '<span class="feed-cell feed-cell-url' + urlCellClass + '"' + (urlFull ? ' data-tooltip="' + escapeAttr(urlFull) + '"' : '') + '>' +
       escapeAttr(urlDisplay) +
@@ -1522,7 +1649,58 @@ function renderFeedRows(filtered, animateLast) {
         selectRequest(g.id);
       }
     });
+
+    // Expand/collapse button — stop propagation so it doesn't also select the row
+    const expandBtn = row.querySelector('.feed-row-expand-btn');
+    if (expandBtn) {
+      expandBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const k = expandBtn.getAttribute('data-group-key');
+        if (expandedGroups.has(k)) expandedGroups.delete(k);
+        else expandedGroups.add(k);
+        renderFeed(false);
+      });
+    }
+
     fragment.appendChild(row);
+
+    // Render expanded sub-rows
+    if (isExpanded && isGroup) {
+      const subItems = g.requests.slice().reverse();
+      subItems.forEach((subReq) => {
+        const subConf = (subReq.confidence ?? 0);
+        const subConfPct = (subConf * 100).toFixed(0);
+        const subConfClass = subConf >= 0.8 ? ' feed-row--high-conf' : subConf < 0.35 ? ' feed-row--low-conf' : '';
+        const subRow = document.createElement('div');
+        subRow.className = 'feed-row feed-row--sub' + (subReq.id === selectedRequestId ? ' feed-row--selected' : '') + subConfClass;
+        subRow.setAttribute('data-request-id', subReq.id);
+        subRow.setAttribute('role', 'button');
+        subRow.setAttribute('tabindex', '0');
+        const subPath = getPathFromUrl(subReq.url);
+        const subPathDisplay = subPath ? truncatePath(subPath, 40) : '—';
+        const subSize = subReq.response_size_bytes != null
+          ? (subReq.response_size_bytes >= 1024 * 1024
+              ? (subReq.response_size_bytes / (1024 * 1024)).toFixed(1) + ' MB'
+              : (subReq.response_size_bytes / 1024).toFixed(1) + ' KB')
+          : '—';
+        subRow.innerHTML =
+          '<span class="feed-cell feed-cell-badge feed-cell-badge--sub"></span>' +
+          '<span class="feed-cell feed-cell-domain feed-cell-domain--sub" ' + (subReq.domain ? 'data-tooltip="' + escapeAttr(subReq.url || subReq.domain) + '"' : '') + '>' +
+          '<span class="feed-sub-indent" aria-hidden="true">└</span>' +
+          escapeAttr(subPathDisplay) +
+          '</span>' +
+          '<span class="feed-cell feed-cell-url" style="color:var(--text-ghost);font-size:var(--text-2xs)">' +
+          escapeAttr(subReq.method || '—') +
+          '</span>' +
+          '<span class="feed-cell feed-cell-conf">' + subConfPct + '%</span>' +
+          '<span class="feed-cell feed-cell-size">' + subSize + '</span>';
+        subRow.addEventListener('click', () => selectRequest(subReq.id));
+        subRow.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectRequest(subReq.id); }
+        });
+        fragment.appendChild(subRow);
+      });
+    }
   });
   list.appendChild(fragment);
 
@@ -1597,6 +1775,16 @@ function selectRequest(id) {
     panel.classList.remove('panel-detail--collapsed');
     grid.classList.add('panel-detail-open');
   }
+  // Always switch site summary to the selected request's origin site.
+  // summaryAutoSelected tracks that this was request-driven (not user dropdown),
+  // so closing the detail panel can reset back to All Sites.
+  const req = feedRequests.find((r) => r.id === id);
+  const site = req && req.initiator_domain;
+  if (site && siteScores[site]) {
+    summarySelectedDomain = site;
+    summaryAutoSelected = true;
+    renderSiteSummary();
+  }
   renderDetailPanel();
   renderFeed(false);
 }
@@ -1608,6 +1796,12 @@ function closeDetailPanel() {
   if (panel && grid) {
     panel.classList.add('panel-detail--collapsed');
     grid.classList.remove('panel-detail-open');
+  }
+  // Reset summary back to "All sites" if it was auto-set by a request click.
+  if (summaryAutoSelected) {
+    summarySelectedDomain = SUMMARY_SCOPE_ALL_SITES;
+    summaryAutoSelected = false;
+    renderSiteSummary();
   }
   clearVtCountdown();
   renderFeed(false);
@@ -1644,16 +1838,108 @@ function renderDetailPanel() {
     return;
   }
 
-  // --- Classifier section ---
+  // --- Classification hero ---
   const badgeClass = categoryToBadgeClass(req.category);
   const badgeLabel = categoryLabel(req.category);
-  const confPct = ((req.confidence ?? 0) * 100).toFixed(0) + '%';
+  const confRaw = (req.confidence ?? 0);
+  const confPct = (confRaw * 100).toFixed(0) + '%';
+  const confColorCls = confRaw >= 0.8 ? 'detail-conf--high' : confRaw >= 0.5 ? 'detail-conf--mid' : 'detail-conf--low';
+  const domain = req.domain || '';
 
-  let fiHtml = '';
+  const classifierHtml =
+    '<div class="detail-section">' +
+    '<div class="detail-classifier-hero">' +
+    '<span class="feed-badge ' + badgeClass + ' detail-badge-lg"><span class="feed-badge-dot"></span>' + escapeHtml(badgeLabel) + '</span>' +
+    '<div class="detail-conf-block">' +
+    '<span class="detail-conf ' + confColorCls + '">' + confPct + '</span>' +
+    '<span class="detail-conf-label">confidence</span>' +
+    '</div>' +
+    '</div>' +
+    '<div class="detail-domain-row">' +
+    '<span class="detail-domain-label">Domain</span>' +
+    '<span class="detail-domain-val">' + escapeHtml(domain || '—') + '</span>' +
+    '</div>' +
+    '</div>';
+
+  // --- URL + meta (always visible) ---
+  const fullUrl = req.url || '';
+  const status = req.response_status || '—';
+  const size = formatBytes(req.response_size_bytes);
+  const ctype = req.content_type || '—';
+  const method = req.method || '—';
+
+  // Parse URL into components for structured display
+  const PARAM_INITIAL_CAP = 5;
+  let parsedOrigin = '', parsedPath = '', parsedParams = [];
+  try {
+    const u = new URL(fullUrl);
+    parsedOrigin = u.origin;
+    parsedPath = u.pathname;
+    parsedParams = Array.from(u.searchParams.entries());
+  } catch {
+    parsedOrigin = fullUrl;
+  }
+
+  const visibleParams = parsedParams.slice(0, PARAM_INITIAL_CAP);
+  const hiddenParams = parsedParams.slice(PARAM_INITIAL_CAP);
+  const paramRowsHtml = (params) => params.map(([k, v]) =>
+    '<div class="detail-param-row">' +
+    '<span class="detail-param-key">' + escapeHtml(k) + '</span>' +
+    '<span class="detail-param-sep" aria-hidden="true">=</span>' +
+    '<span class="detail-param-val">' + escapeHtml(v) + '</span>' +
+    '</div>'
+  ).join('');
+
+  const urlMetaHtml =
+    '<div class="detail-section">' +
+    '<div class="detail-section-hd">REQUEST</div>' +
+    '<div class="detail-meta-grid">' +
+    '<span class="detail-meta-label">Method</span><span class="detail-meta-val">' + escapeHtml(method) + '</span>' +
+    '<span class="detail-meta-label">Status</span><span class="detail-meta-val">' + escapeHtml(String(status)) + '</span>' +
+    '<span class="detail-meta-label">Size</span><span class="detail-meta-val">' + escapeHtml(size) + '</span>' +
+    '<span class="detail-meta-label">Type</span><span class="detail-meta-val detail-meta-val--wrap">' + escapeHtml(ctype) + '</span>' +
+    '</div>' +
+    '<div class="detail-url-parsed">' +
+    '<div class="detail-url-parsed-header">' +
+    '<div class="detail-url-segments">' +
+    '<div class="detail-url-segment">' +
+    '<span class="detail-url-seg-label">BASE</span>' +
+    '<span class="detail-url-seg-val detail-url-seg-val--origin">' + escapeHtml(parsedOrigin) + '</span>' +
+    '</div>' +
+    (parsedPath && parsedPath !== '/' ? '<div class="detail-url-segment">' +
+    '<span class="detail-url-seg-label">PATH</span>' +
+    '<span class="detail-url-seg-val">' + escapeHtml(parsedPath) + '</span>' +
+    '</div>' : '') +
+    '</div>' +
+    '<button class="detail-copy-btn" id="detail-url-copy" type="button" data-tooltip="Copy full URL to clipboard">COPY</button>' +
+    '</div>' +
+    (parsedParams.length > 0
+      ? '<div class="detail-param-list">' +
+        '<div class="detail-param-section-label">QUERY <span class="detail-param-count">(' + parsedParams.length + ')</span></div>' +
+        '<div class="detail-param-rows" id="detail-param-visible">' + paramRowsHtml(visibleParams) + '</div>' +
+        (hiddenParams.length > 0
+          ? '<div class="detail-param-rows detail-param-rows--hidden" id="detail-param-hidden" hidden>' + paramRowsHtml(hiddenParams) + '</div>' +
+            '<button type="button" class="detail-param-more-btn" id="detail-param-more">+ ' + hiddenParams.length + ' more</button>'
+          : '') +
+        '</div>'
+      : '') +
+    '</div>' +
+    '</div>';
+
+  // --- VirusTotal (always visible) ---
+  const vtHtml =
+    '<div class="detail-section" id="detail-vt-section">' +
+    '<div class="detail-section-hd">DOMAIN REPUTATION</div>' +
+    '<button class="detail-vt-btn" id="detail-vt-btn" type="button" data-tooltip="Look up domain reputation on VirusTotal">FETCH REPUTATION</button>' +
+    '<div class="detail-vt-result" id="detail-vt-result" aria-live="polite"></div>' +
+    '</div>';
+
+  // --- Feature importances (collapsible) ---
   const fis = Array.isArray(req.feature_importances) ? req.feature_importances : [];
+  let fiInnerHtml = '';
   if (fis.length > 0) {
     const maxImp = Math.max(...fis.map((f) => f.importance), 0.001);
-    fiHtml = fis.map((f) => {
+    fiInnerHtml = '<div class="detail-fi-list">' + fis.map((f) => {
       const barW = Math.round((f.importance / maxImp) * 100);
       return (
         '<div class="detail-fi-row">' +
@@ -1662,48 +1948,19 @@ function renderDetailPanel() {
         '<span class="detail-fi-val">' + escapeHtml(f.importance.toFixed(2)) + '</span>' +
         '</div>'
       );
-    }).join('');
+    }).join('') + '</div>';
   }
-
-  const classifierHtml =
-    '<div class="detail-section">' +
-    '<div class="detail-section-hd">CLASSIFICATION</div>' +
-    '<div class="detail-classifier-top">' +
-    '<span class="feed-badge ' + badgeClass + '"><span class="feed-badge-dot"></span>' + escapeHtml(badgeLabel) + '</span>' +
-    '<span class="detail-conf">' + confPct + '</span>' +
-    '</div>' +
-    (fiHtml ? '<div class="detail-fi-list">' + fiHtml + '</div>' : '') +
+  const fiHtml = fis.length === 0 ? '' :
+    '<div class="detail-section detail-section--collapsible">' +
+    '<button type="button" class="detail-section-toggle" data-target="detail-fi-body">' +
+    '<span class="detail-section-hd detail-section-hd--toggle">FEATURE IMPORTANCE <span class="detail-section-count">(' + fis.length + ')</span></span>' +
+    '<span class="detail-toggle-arrow" aria-hidden="true">▶</span>' +
+    '</button>' +
+    '<div class="detail-collapsible-body" id="detail-fi-body" hidden>' + fiInnerHtml + '</div>' +
     '</div>';
 
-  // --- URL section ---
-  const fullUrl = req.url || '';
-  const urlHtml =
-    '<div class="detail-section">' +
-    '<div class="detail-section-hd">FULL URL</div>' +
-    '<div class="detail-url-wrap">' +
-    '<span class="detail-url-text">' + escapeHtml(fullUrl) + '</span>' +
-    '<button class="detail-copy-btn" id="detail-url-copy" type="button">COPY</button>' +
-    '</div>' +
-    '</div>';
-
-  // --- Response meta ---
-  const status = req.response_status || '—';
-  const size = formatBytes(req.response_size_bytes);
-  const ctype = req.content_type || '—';
-  const method = req.method || '—';
-  const metaHtml =
-    '<div class="detail-section">' +
-    '<div class="detail-section-hd">RESPONSE</div>' +
-    '<div class="detail-meta-grid">' +
-    '<span class="detail-meta-label">Status</span><span class="detail-meta-val">' + escapeHtml(String(status)) + '</span>' +
-    '<span class="detail-meta-label">Size</span><span class="detail-meta-val">' + escapeHtml(size) + '</span>' +
-    '<span class="detail-meta-label">Type</span><span class="detail-meta-val">' + escapeHtml(ctype) + '</span>' +
-    '<span class="detail-meta-label">Method</span><span class="detail-meta-val">' + escapeHtml(method) + '</span>' +
-    '</div>' +
-    '</div>';
-
-  // --- Headers ---
-  function buildHeadersSection(title, headersObj) {
+  // --- Headers (collapsible) ---
+  function buildCollapsibleHeaders(title, headersObj, bodyId) {
     const entries = Object.entries(headersObj || {});
     if (entries.length === 0) return '';
     const rows = entries.map(([k, v]) =>
@@ -1713,27 +1970,46 @@ function renderDetailPanel() {
       '</div>'
     ).join('');
     return (
-      '<div class="detail-section">' +
-      '<div class="detail-section-hd">' + title + ' <span class="detail-section-count">(' + entries.length + ')</span></div>' +
+      '<div class="detail-section detail-section--collapsible">' +
+      '<button type="button" class="detail-section-toggle" data-target="' + bodyId + '">' +
+      '<span class="detail-section-hd detail-section-hd--toggle">' + title + ' <span class="detail-section-count">(' + entries.length + ')</span></span>' +
+      '<span class="detail-toggle-arrow" aria-hidden="true">▶</span>' +
+      '</button>' +
+      '<div class="detail-collapsible-body" id="' + bodyId + '" hidden>' +
       '<div class="detail-kv-list">' + rows + '</div>' +
+      '</div>' +
       '</div>'
     );
   }
 
-  const reqHeadersHtml = buildHeadersSection('REQUEST HEADERS', req.request_headers);
-  const resHeadersHtml = buildHeadersSection('RESPONSE HEADERS', req.response_headers);
+  const reqHeadersHtml = buildCollapsibleHeaders('REQUEST HEADERS', req.request_headers, 'detail-req-headers-body');
+  const resHeadersHtml = buildCollapsibleHeaders('RESPONSE HEADERS', req.response_headers, 'detail-res-headers-body');
 
-  // --- VirusTotal section ---
-  const domain = req.domain || '';
-  const vtHtml =
-    '<div class="detail-section" id="detail-vt-section">' +
-    '<div class="detail-section-hd">DOMAIN REPUTATION</div>' +
-    '<div class="detail-vt-domain">' + escapeHtml(domain) + '</div>' +
-    '<button class="detail-vt-btn" id="detail-vt-btn" type="button">FETCH REPUTATION</button>' +
-    '<div class="detail-vt-result" id="detail-vt-result"></div>' +
-    '</div>';
+  contentEl.innerHTML = classifierHtml + urlMetaHtml + vtHtml + fiHtml + reqHeadersHtml + resHeadersHtml;
 
-  contentEl.innerHTML = classifierHtml + urlHtml + metaHtml + reqHeadersHtml + resHeadersHtml + vtHtml;
+  // Bind "show more params" toggle
+  const moreBtn = document.getElementById('detail-param-more');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      const hidden = document.getElementById('detail-param-hidden');
+      if (!hidden) return;
+      hidden.hidden = false;
+      moreBtn.hidden = true;
+    });
+  }
+
+  // Bind collapse toggles
+  contentEl.querySelectorAll('.detail-section-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      const body = document.getElementById(targetId);
+      const arrow = btn.querySelector('.detail-toggle-arrow');
+      if (!body) return;
+      const isOpen = !body.hidden;
+      body.hidden = isOpen;
+      if (arrow) arrow.textContent = isOpen ? '▶' : '▼';
+    });
+  });
 
   // Bind copy button
   const copyBtn = document.getElementById('detail-url-copy');
@@ -1865,6 +2141,13 @@ async function fetchVirusTotal(domain) {
   }
 }
 
+/** Sync all category checkboxes inside a panel element to filterState. */
+function syncCategoryCheckboxes(panel) {
+  panel.querySelectorAll('input[data-category]').forEach((cb) => {
+    cb.checked = filterState.categories.has(cb.getAttribute('data-category'));
+  });
+}
+
 function buildFilterBar() {
   const filterBar = document.getElementById('feed-filters');
   const toolbar = document.getElementById('feed-toolbar');
@@ -1895,6 +2178,36 @@ function buildFilterBar() {
   const panel = document.createElement('div');
   panel.className = 'feed-filter-dropdown-panel';
   panel.setAttribute('role', 'listbox');
+
+  // Select All / Clear row
+  const bulkRow = document.createElement('div');
+  bulkRow.className = 'feed-filter-bulk-row';
+  const selectAllBtn = document.createElement('button');
+  selectAllBtn.type = 'button';
+  selectAllBtn.className = 'feed-filter-bulk-btn';
+  selectAllBtn.textContent = 'SELECT ALL';
+  selectAllBtn.addEventListener('click', () => {
+    CATEGORIES.forEach((c) => filterState.categories.add(c));
+    syncCategoryCheckboxes(panel);
+    updateCategoryDropdownLabel();
+    updateActiveFilterChips();
+    renderFeed(false);
+  });
+  const clearAllBtn = document.createElement('button');
+  clearAllBtn.type = 'button';
+  clearAllBtn.className = 'feed-filter-bulk-btn feed-filter-bulk-btn--clear';
+  clearAllBtn.textContent = 'CLEAR';
+  clearAllBtn.addEventListener('click', () => {
+    filterState.categories.clear();
+    syncCategoryCheckboxes(panel);
+    updateCategoryDropdownLabel();
+    updateActiveFilterChips();
+    renderFeed(false);
+  });
+  bulkRow.appendChild(selectAllBtn);
+  bulkRow.appendChild(clearAllBtn);
+  panel.appendChild(bulkRow);
+
   CATEGORIES.forEach((cat) => {
     const label = document.createElement('label');
     label.className = 'feed-filter-dropdown-option';
@@ -2144,6 +2457,7 @@ function buildFilterBar() {
     requestCount = 0;
     pendingNewCount = 0;
     lastGroupCounts.clear();
+    expandedGroups.clear();
     if (currentSession && currentSession.id) {
       chrome.storage.local.set({ ['requests:' + currentSession.id]: [] });
     }
@@ -2297,9 +2611,7 @@ function updateActiveFilterChips() {
     filterState.categories.forEach((cat) => {
       const chip = document.createElement('span');
       chip.className = 'feed-active-chip';
-      const tip = categoryTooltip(cat);
-      if (tip) chip.setAttribute('data-tooltip', tip);
-      chip.innerHTML = '<span class="feed-active-chip-label">' + escapeAttr(categoryLabel(cat)) + '</span><button type="button" class="feed-active-chip-remove" aria-label="Remove filter">×</button>';
+      chip.innerHTML = '<span class="feed-active-chip-label">' + escapeAttr(categoryLabel(cat)) + '</span><button type="button" class="feed-active-chip-remove" data-tooltip="Remove filter" aria-label="Remove filter">×</button>';
       const removeBtn = chip.querySelector('.feed-active-chip-remove');
       removeBtn.addEventListener('click', () => {
         filterState.categories.delete(cat);
@@ -2447,6 +2759,19 @@ function init() {
     requestAnimationFrame(() => scheduleTimelineRender());
   });
 
+  // When user switches tabs, refresh site summary to the newly active tab's site (if not manually selected).
+  chrome.tabs.onActivated.addListener(() => {
+    if (!summaryAutoSelected && summarySelectedDomain !== SUMMARY_SCOPE_ALL_SITES) {
+      refreshSiteSummary();
+    }
+  });
+
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.status === 'complete' && !summaryAutoSelected && summarySelectedDomain !== SUMMARY_SCOPE_ALL_SITES) {
+      refreshSiteSummary();
+    }
+  });
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
     if (changes['session:current']) hideSessionConfirmBar();
@@ -2590,6 +2915,7 @@ function init() {
         requestCount = 0;
         pendingNewCount = 0;
         lastGroupCounts.clear();
+        expandedGroups.clear();
       }
       clearFeedOnStart = false;
       sessionStartTime = Date.now();

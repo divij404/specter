@@ -20,7 +20,7 @@
           <h2 class="feed-header-title">LIVE FEED</h2>
           <span class="feed-title-spacer"></span>
           <button type="button" class="pause-btn running" id="pause-btn" aria-label="Pause feed" style="display: none;">⏸ PAUSE</button>
-          <button type="button" class="session-btn stopped" id="session-btn" aria-live="polite">▶ START</button>
+          <button type="button" class="session-btn stopped" id="session-btn" aria-live="polite">▶ NEW SESSION</button>
           <span class="feed-header-timer" id="feed-header-timer" aria-live="polite">00:00</span>
         </div>
         <div class="session-confirm" id="session-confirm" hidden role="status">
@@ -99,21 +99,10 @@
         >
           <div class="fingerprint-drawer-panel">
             <div class="fingerprint-drawer-header">
-              <div class="fingerprint-drawer-title-block">
-                <span id="fingerprint-drawer-heading" class="fingerprint-drawer-heading">FINGERPRINTING — —</span>
-              </div>
-              <button type="button" class="fingerprint-drawer-close" id="fingerprint-drawer-close" aria-label="Close fingerprinting panel">✕</button>
+              <span id="fingerprint-drawer-heading" class="fingerprint-drawer-heading">FINGERPRINTING — —</span>
             </div>
             <div class="fingerprint-drawer-scroll">
               <div id="fingerprint-signal-rows" class="fingerprint-signal-rows"></div>
-              <div class="fingerprint-entropy-row">
-                <span class="fingerprint-entropy-label">Entropy Score</span>
-                <div class="fingerprint-entropy-display">
-                  <span id="fingerprint-entropy-value" class="fingerprint-entropy-value entropy-value--low">0</span>
-                  <span class="fingerprint-entropy-suffix">/10</span>
-                </div>
-                <div id="fingerprint-entropy-tier" class="fingerprint-entropy-tier fingerprint-entropy-tier--low" aria-live="polite">LOW RISK</div>
-              </div>
             </div>
           </div>
         </div>

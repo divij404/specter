@@ -70,6 +70,11 @@ body {
   background: var(--btn-primary-hover-bg);
 }
 
+.popup-btn--primary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .popup-btn--secondary {
   background: transparent;
   color: var(--text-secondary);
@@ -89,7 +94,12 @@ body {
 }
 
 .popup-btn--destructive:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.12);
+  background: color-mix(in srgb, var(--status-error) 12%, transparent);
+}
+
+.popup-btn--destructive:focus-visible {
+  outline: 2px solid var(--status-error);
+  outline-offset: 2px;
 }
 
 .popup-btn--link {
@@ -127,8 +137,16 @@ body {
 }
 
 .popup-session .popup-btn:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Secondary and destructive disabled: strip all active-state color so they
+   don't look like live controls when the session is stopped */
+.popup-btn--secondary:disabled,
+.popup-btn--destructive:disabled {
+  background: transparent;
+  color: var(--text-ghost);
+  border-color: var(--border-subtle);
 }
 
 .popup-status-row {
