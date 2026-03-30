@@ -52,11 +52,59 @@ function getNavStartTime(tabId) {
   return NAV_START_CACHE.get(tabId) ?? 0;
 }
 
+// Maps tabId → eTLD+1 of the top-level page — used to correctly attribute
+// requests from embedded iframes (e.g. ext-twitch.tv, googlesyndication.com)
+// back to the actual page the user is on.
+const TAB_URL_CACHE = new Map();
+
+// ── Crawl state (persisted in session storage so SW restarts don't lose it) ───
+let crawlState = null;
+
+async function loadCrawlState() {
+  if (crawlState) return crawlState;
+  const r = await chrome.storage.session.get('crawl:state');
+  crawlState = r['crawl:state'] || null;
+  return crawlState;
+}
+async function saveCrawlState(state) {
+  crawlState = state;
+  if (state) await chrome.storage.session.set({ 'crawl:state': state });
+  else        await chrome.storage.session.remove('crawl:state');
+}
+
+// Restore crawl state on SW wake-up (zero-cost if no crawl is running)
+chrome.storage.session.get('crawl:state').then((r) => { crawlState = r['crawl:state'] || null; });
+chrome.tabs.onRemoved.addListener((tabId) => {
+  TAB_URL_CACHE.delete(tabId);
+  NAV_START_CACHE.delete(tabId);
+});
+
+// Known second-level TLDs that require 3 parts for a valid eTLD+1
+// e.g. bbci.co.uk → ['bbci','co','uk'] → slice(-3) = 'bbci.co.uk'
+const MULTI_PART_TLDS = new Set([
+  'co.uk','org.uk','me.uk','net.uk','ltd.uk','plc.uk','sch.uk',
+  'com.au','net.au','org.au','edu.au','gov.au',
+  'co.nz','net.nz','org.nz',
+  'co.jp','ne.jp','or.jp','ac.jp',
+  'co.in','net.in','org.in',
+  'co.za','org.za','net.za',
+  'com.br','net.br','org.br',
+  'co.kr','or.kr','ne.kr',
+  'com.mx','net.mx','org.mx',
+  'co.id','net.id','or.id',
+  'com.sg','net.sg','org.sg',
+  'com.hk','net.hk','org.hk',
+  'com.tw','net.tw','org.tw',
+  'com.ar','net.ar','org.ar',
+]);
+
 function extractETLDPlusOne(hostname) {
   if (!hostname) return '';
   const parts = hostname.split('.');
   if (parts.length <= 2) return hostname;
-  return parts.slice(-2).join('.');
+  const lastTwo = parts.slice(-2).join('.');
+  if (MULTI_PART_TLDS.has(lastTwo) && parts.length > 2) return parts.slice(-3).join('.');
+  return lastTwo;
 }
 
 // Expanded tracking param list (~40 known params)
@@ -73,6 +121,10 @@ const TRACKING_PARAMS = new Set([
 
 // Known CDN / infrastructure domains — strong legitimate signal
 const CDN_PATTERN = /cloudflare|fastly|akamai|akamaized|cloudfront|jsdelivr|unpkg|cdnjs|staticfiles|gstatic|googleapis|bootstrapcdn|cloudinary|amazonaws|ytimg|googlevideo|ggpht|ttvnw|jtvnw|twimg|fbcdn|cdninstagram|steamstatic|rbxcdn|discordapp/i;
+
+// Brand-owned CDN domains (e.g. spotifycdn.com, wfcdn.com, macysassets.com)
+// These are first-party asset hosts that don't match the generic CDN pattern above.
+const BRAND_CDN_DOMAIN = /cdn|assets?|images?|img|static|media|content/i;
 
 // Known tracker subdomains
 const TRACKER_SUBDOMAIN_PATTERN = /^(ads?|track(ing)?|pixel|beacon|analytics?|metrics?|collect|log|stat(s)?|telemetry|event(s)?|monitor|probe)\./i;
@@ -102,11 +154,16 @@ function extractFeatures(details) {
     return null;
   }
 
-  const initiatorDomain = details.initiator
+  // Prefer the tab's top-level URL over the raw initiator field.
+  // The initiator reflects the immediate frame origin, which for embedded
+  // iframes (ext-twitch.tv, googlesyndication.com, recaptcha.net, etc.) is
+  // the iframe host — not the page the user is actually on.
+  const rawInitiator = details.initiator
     ? (() => {
         try { return extractETLDPlusOne(new URL(details.initiator).hostname); } catch { return ''; }
       })()
     : '';
+  const initiatorDomain = TAB_URL_CACHE.get(details.tabId) || rawInitiator;
 
   const domain = extractETLDPlusOne(url.hostname);
   const subdomain = url.hostname.replace(domain, '').replace(/\.$/, '');
@@ -245,6 +302,19 @@ function classifyRuleBased(features) {
                                                 add('legitimate',  'cdn_style_font',             0.75);
   if (features.response_status === 200 && features.is_same_domain)
                                                 add('legitimate',  'ok_same_domain',             0.30);
+  // Brand-owned CDN: third-party asset host whose domain name contains CDN-like
+  // keywords but has no tracking signals — outweighs cors_third_party_script alone.
+  if (features.is_third_party && BRAND_CDN_DOMAIN.test(features.domain)
+      && !features.has_tracking_params && !features.subdomain_is_tracker
+      && !features.path_is_tracker)             add('legitimate',  'brand_cdn_domain',           0.60);
+  // Catch-all: no tracking indicators present → weakly legitimate.
+  // Covers generic third-party JS/images/API calls that don't match any
+  // specific pattern (widgets, embeds, social buttons, etc.).
+  if (!features.has_tracking_params && !features.path_is_tracker
+      && !features.subdomain_is_tracker && !features.path_matches_ad
+      && !features.path_matches_analytics && !features.path_matches_fingerprint
+      && !features.domain_matches_analytics && !features.domain_matches_session_replay
+      && !features.in_blocklist)                add('legitimate',  'no_tracking_signals',        0.25);
 
   // ── Aggregate scores ────────────────────────────────────────────────────
   const totals = {};
@@ -254,9 +324,10 @@ function classifyRuleBased(features) {
 
   const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
 
-  // No signals fired → unclassified
+  // No signals fired → shouldn't happen after no_tracking_signals catch-all,
+  // but guard anyway with a low-confidence legitimate rather than unclassified.
   if (sorted.length === 0) {
-    return { category: 'unclassified', confidence: 0.2, feature_importances: [] };
+    return { category: 'legitimate', confidence: 0.35, feature_importances: [{ feature: 'no_signals', importance: 1.0 }] };
   }
 
   const [winnerCat, winnerScore] = sorted[0];
@@ -459,7 +530,12 @@ async function batchWrite(request) {
 
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
-    if (details.type === 'main_frame') NAV_START_CACHE.set(details.tabId, details.timeStamp);
+    if (details.type === 'main_frame') {
+      NAV_START_CACHE.set(details.tabId, details.timeStamp);
+      try {
+        TAB_URL_CACHE.set(details.tabId, extractETLDPlusOne(new URL(details.url).hostname));
+      } catch {}
+    }
   },
   { urls: ['<all_urls>'], types: ['main_frame'] }
 );
@@ -493,10 +569,63 @@ chrome.webRequest.onCompleted.addListener(
   ['responseHeaders', 'extraHeaders']
 );
 
+// ── Crawl: dwell-alarm fires → navigate to next URL ──────────────────────────
+//
+// The alarm is the sole controller of crawl advancement.
+// tabs.onUpdated is intentionally NOT used for this — many sites fire multiple
+// status:'complete' events per visit (JS redirects, SPA route changes, consent
+// overlays, etc.), which would cause the index to advance multiple times per
+// site and the crawl to terminate prematurely.
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'crawl_dwell') return;
+  const state = await loadCrawlState();
+  if (!state?.active) return;
+
+  // All sites visited → done
+  if (state.index >= state.urls.length) {
+    broadcastToDashboard({ type: 'crawl_done', total: state.urls.length });
+    chrome.tabs.remove(state.tabId).catch(() => {});
+    await saveCrawlState(null);
+    return;
+  }
+
+  // Navigate to next URL, advance index
+  const rawUrl  = state.urls[state.index];
+  const nextUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : 'https://' + rawUrl;
+  state.index++;
+
+  // Wrap everything in an outer try-catch so that even if tab navigation fails
+  // completely, we still schedule the next alarm and keep the chain alive.
+  try {
+    // Chrome Memory Saver can silently discard background tabs after ~30-60 min
+    // of no user interaction. Detect and recreate rather than aborting.
+    try {
+      const tab = await chrome.tabs.get(state.tabId);
+      if (tab.discarded) throw new Error('discarded');
+      await chrome.tabs.update(state.tabId, { url: nextUrl });
+    } catch {
+      // Tab closed, discarded, or invalid URL on update — open a fresh one
+      const newTab = await chrome.tabs.create({ url: nextUrl, active: false });
+      state.tabId = newTab.id;
+    }
+  } catch (err) {
+    // tabs.create also failed (e.g. bad URL, Chrome error) — skip this site
+    console.warn('[Specter] crawl: could not navigate to', nextUrl, err);
+  }
+
+  await saveCrawlState(state);
+  broadcastToDashboard({ type: 'crawl_progress', index: state.index, total: state.urls.length, url: nextUrl, startedAt: state.startedAt });
+
+  // Use Math.max to guarantee at least 10 s — avoids sub-second clamping edge
+  // cases in Chrome MV3 while still respecting the configured dwell time.
+  const delayMinutes = Math.max(10 / 60, state.dwellMs / 60000);
+  chrome.alarms.create('crawl_dwell', { delayInMinutes: delayMinutes });
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'start_session') {
     startSession().then((session) => {
-      broadcastToDashboard({ type: 'session_started', session_id: session.id });
+      broadcastToDashboard({ type: 'session_started', session_id: session.id, keep_rows: message.keep_rows ?? false });
       sendResponse({ ok: true, session_id: session.id });
     });
     return true;
@@ -520,8 +649,53 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'resume_session') {
-    chrome.storage.local.set({ 'session:paused': false, 'session:elapsed_frozen': 0 }).then(() => {
-      broadcastToDashboard({ type: 'feed_resumed' });
+    chrome.storage.local.get(['session:current', 'session:elapsed_frozen']).then((r) => {
+      const session = r['session:current'];
+      const frozenSec = Number(r['session:elapsed_frozen']) || 0;
+      const updates = {
+        'session:paused': false,
+        'session:elapsed_frozen': 0,
+      };
+      // Shift started_at forward so Date.now() - started_at == elapsed active time,
+      // not wall-clock time (which would include the pause duration).
+      if (session) {
+        updates['session:current'] = {
+          ...session,
+          started_at: Date.now() - frozenSec * 1000,
+        };
+      }
+      chrome.storage.local.set(updates).then(() => {
+        broadcastToDashboard({ type: 'feed_resumed' });
+        sendResponse({ ok: true });
+      });
+    });
+    return true;
+  }
+  if (message.type === 'start_crawl') {
+    loadCrawlState().then(async (existing) => {
+      if (existing?.active) { sendResponse({ ok: false, error: 'crawl already running' }); return; }
+      const urls    = message.urls || [];
+      const dwellMs = message.dwell_ms || 6000;
+      if (urls.length === 0) { sendResponse({ ok: false, error: 'no urls' }); return; }
+      // index: 1 = we've navigated to urls[0]; alarm will navigate to urls[1], urls[2], ...
+      const state = { active: true, urls, index: 1, dwellMs, tabId: null, startedAt: Date.now() };
+      await saveCrawlState(state);
+      const tab = await chrome.tabs.create({ url: urls[0], active: false });
+      state.tabId = tab.id;
+      await saveCrawlState(state);
+      broadcastToDashboard({ type: 'crawl_started', total: urls.length });
+      broadcastToDashboard({ type: 'crawl_progress', index: 1, total: urls.length, url: urls[0], startedAt: state.startedAt });
+      chrome.alarms.create('crawl_dwell', { delayInMinutes: Math.max(10 / 60, dwellMs / 60000) });
+      sendResponse({ ok: true, tabId: tab.id });
+    });
+    return true;
+  }
+  if (message.type === 'stop_crawl') {
+    loadCrawlState().then(async (state) => {
+      if (state?.tabId) chrome.tabs.remove(state.tabId).catch(() => {});
+      chrome.alarms.clear('crawl_dwell');
+      await saveCrawlState(null);
+      broadcastToDashboard({ type: 'crawl_stopped' });
       sendResponse({ ok: true });
     });
     return true;

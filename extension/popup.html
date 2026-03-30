@@ -4,35 +4,48 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Specter</title>
+  <link rel="stylesheet" href="shared.css">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <header class="popup-header">
     <img src="icons/brand/logo.svg" alt="" class="specter-logo specter-logo--popup">
     <span class="popup-title">SPECTER</span>
+    <span class="popup-header-spacer"></span>
+    <span class="popup-status-pill" id="status-pill" data-state="stopped">
+      <span class="popup-status-dot" id="status-dot"></span>
+      <span class="popup-status-label" id="status-label">STOPPED</span>
+    </span>
   </header>
-  <div id="popup-content" class="popup-content">
-  <div class="popup-status-row">
-    <span id="status-dot" class="popup-status-dot popup-status-dot--stopped"></span>
-    <span id="status-label" class="popup-status-label">STOPPED</span>
-    <span id="timer" class="popup-timer">00:00</span>
+
+  <div class="popup-body">
+    <div class="popup-meta-row">
+      <span class="popup-site-name" id="current-site">—</span>
+      <span class="popup-timer" id="timer" aria-live="polite"></span>
+    </div>
+
+    <div class="popup-score-block">
+      <div class="popup-score-display">
+        <span class="popup-score-number" id="privacy-score">—</span>
+        <span class="popup-score-denom">/100</span>
+      </div>
+      <span class="popup-score-label">PRIVACY SCORE</span>
+    </div>
+
+    <div class="popup-stats-row">
+      <span class="popup-tracker-count" id="tracker-count">—</span>
+    </div>
   </div>
-  <div id="site-row" class="popup-site-row">
-    <span id="current-site" class="popup-site-name">—</span>
-    <span id="privacy-score" class="popup-score">—</span>
+
+  <div class="popup-actions" id="popup-actions">
+    <!-- rendered by JS based on state -->
   </div>
-  <div class="popup-divider"></div>
-  <div class="popup-tracker-row">
-    <span id="tracker-count" class="popup-tracker-count">0 trackers detected</span>
+
+  <div class="popup-footer">
+    <a id="open-dashboard" class="popup-footer-btn" href="" role="button">Open Dashboard ↗</a>
+    <button type="button" id="btn-copy-report" class="popup-footer-btn">Copy Report</button>
   </div>
-  <div class="popup-session">
-    <button type="button" id="btn-start" class="popup-btn popup-btn--primary" title="Start recording">Start</button>
-    <button type="button" id="btn-pause" class="popup-btn popup-btn--secondary" disabled title="Pause recording">Pause</button>
-    <button type="button" id="btn-stop" class="popup-btn popup-btn--destructive" disabled title="Stop recording">Stop</button>
-  </div>
-  <a id="open-dashboard" class="popup-btn popup-btn--primary" href="" role="button">Open Dashboard</a>
-  <button type="button" id="btn-copy-report" class="popup-btn popup-btn--link">Copy Report</button>
-  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

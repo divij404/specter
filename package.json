@@ -8,9 +8,12 @@
     "lucide": "^0.460.0",
     "onnxruntime-web": "1.17.0",
     "pngjs": "^7.0.0",
+    "puppeteer-core": "^24.15.0",
     "sharp": "^0.33.5"
   },
   "scripts": {
-    "bundle-libs": "node scripts/bundle-libs.js"
+    "bundle-libs": "node scripts/bundle-libs.js",
+    "chrome": "node tools/launch-chrome.js",
+    "crawl": "node tools/crawl.js"
   }
 }

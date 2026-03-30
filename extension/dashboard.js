@@ -58,7 +58,7 @@ let pendingNewCount = 0;
 const FEED_CAP = 200;
 let lastGroupCounts = new Map();
 let expandedGroups = new Set();
-let clearFeedOnStart = false;
+// clearFeedOnStart removed — keep_rows flag is now carried in the session_started message
 let frozenElapsedSeconds = 0;
 
 /* Phase 9: request detail + VirusTotal */
@@ -2712,6 +2712,9 @@ function init() {
   setupFingerprintDrawer();
   buildFilterBar();
   initHistoryOverlay();
+  initSettingsOverlay();
+  initCrawlOverlay();
+  pruneOldSessions();
 
   hideSessionConfirmBar();
 
@@ -2746,8 +2749,14 @@ function init() {
         if (wrap) wrap.setAttribute('data-open', 'false');
         const trig = wrap && wrap.querySelector('.feed-filter-dropdown-trigger');
         if (trig) trig.setAttribute('aria-expanded', 'false');
+      } else if (settingsOverlayOpen()) {
+        closeSettingsOverlay();
+        const settingsBtn = document.getElementById('settings-nav-btn');
+        if (settingsBtn) settingsBtn.classList.remove('active');
       } else if (historyOverlayOpen()) {
         closeHistoryOverlay();
+        const histBtn = document.getElementById('history-nav-btn');
+        if (histBtn) histBtn.classList.remove('active');
       } else {
         closeDetailPanel();
       }
@@ -2857,16 +2866,14 @@ function init() {
   const confirmEl = document.getElementById('session-confirm');
   if (confirmClear) {
     confirmClear.addEventListener('click', () => {
-      clearFeedOnStart = true;
       hideSessionConfirmBar();
-      chrome.runtime.sendMessage({ type: 'start_session' });
+      chrome.runtime.sendMessage({ type: 'start_session', keep_rows: false });
     });
   }
   if (confirmKeep) {
     confirmKeep.addEventListener('click', () => {
-      clearFeedOnStart = false;
       hideSessionConfirmBar();
-      chrome.runtime.sendMessage({ type: 'start_session' });
+      chrome.runtime.sendMessage({ type: 'start_session', keep_rows: true });
     });
   }
 
@@ -2922,14 +2929,13 @@ function init() {
       hideSessionConfirmBar();
       feedPaused = false;
       frozenElapsedSeconds = 0;
-      if (clearFeedOnStart) {
+      if (!message.keep_rows) {
         feedRequests = [];
         requestCount = 0;
         pendingNewCount = 0;
         lastGroupCounts.clear();
         expandedGroups.clear();
       }
-      clearFeedOnStart = false;
       sessionStartTime = Date.now();
       currentSession = { id: message.session_id, active: true };
       siteScores = {};
@@ -3167,6 +3173,268 @@ async function renderHistoryOverlay() {
   });
 }
 
+// ─── Settings overlay ──────────────────────────────────────────────────────
+
+function settingsOverlayOpen() {
+  const el = document.getElementById('settings-overlay');
+  return el ? el.classList.contains('settings-overlay--open') : false;
+}
+
+function openSettingsOverlay() {
+  const el = document.getElementById('settings-overlay');
+  if (!el) return;
+  el.classList.add('settings-overlay--open');
+  el.setAttribute('aria-hidden', 'false');
+  renderSettingsOverlay();
+}
+
+function closeSettingsOverlay() {
+  const el = document.getElementById('settings-overlay');
+  if (!el) return;
+  el.classList.remove('settings-overlay--open');
+  el.setAttribute('aria-hidden', 'true');
+}
+
+async function saveSettingField(key, value) {
+  const { settings: stored } = await chrome.storage.local.get('settings');
+  const next = { ...(stored || {}), [key]: value };
+  await chrome.storage.local.set({ settings: next });
+  settings[key] = value;
+}
+
+async function pruneOldSessions() {
+  const { settings: s } = await chrome.storage.local.get('settings');
+  const days = Number(s?.data_retention_days ?? 30);
+  if (!days || days <= 0) return; // 0 = never prune
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const result = await chrome.storage.local.get('sessions:history');
+  const history = result['sessions:history'] || [];
+  const expired = history.filter((h) => h.stopped_at && h.stopped_at < cutoff);
+  if (expired.length === 0) return;
+  const kept = history.filter((h) => !h.stopped_at || h.stopped_at >= cutoff);
+  const keysToRemove = expired.flatMap((h) => ['requests:' + h.id, 'scores:' + h.id]);
+  await chrome.storage.local.set({ 'sessions:history': kept });
+  if (keysToRemove.length > 0) await chrome.storage.local.remove(keysToRemove);
+}
+
+async function renderSettingsOverlay() {
+  const body = document.getElementById('settings-overlay-body');
+  if (!body) return;
+
+  const { settings: stored } = await chrome.storage.local.get('settings');
+  const s = { autoscroll_feed: true, data_retention_days: 30, virustotal_api_key: '', ...(stored || {}) };
+
+  const retentionOptions = [
+    { value: 7,  label: '7 days'  },
+    { value: 14, label: '14 days' },
+    { value: 30, label: '30 days' },
+    { value: 90, label: '90 days' },
+    { value: 0,  label: 'Never'   },
+  ];
+  const retentionSelect = retentionOptions
+    .map((o) => `<option value="${o.value}"${Number(s.data_retention_days) === o.value ? ' selected' : ''}>${o.label}</option>`)
+    .join('');
+
+  body.innerHTML = `
+    <div class="settings-section">
+      <div class="settings-section-title">FEED</div>
+
+      <div class="settings-row">
+        <div class="settings-row-label">
+          <div class="settings-row-title">Autoscroll</div>
+          <div class="settings-row-hint">Keep the feed scrolled to the latest request</div>
+        </div>
+        <label class="settings-toggle" aria-label="Autoscroll feed">
+          <input type="checkbox" id="setting-autoscroll"${s.autoscroll_feed ? ' checked' : ''}>
+          <span class="settings-toggle-track"></span>
+        </label>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-row-label">
+          <div class="settings-row-title">Data retention</div>
+          <div class="settings-row-hint">Automatically delete sessions older than this</div>
+        </div>
+        <select id="setting-retention" class="settings-select">
+          ${retentionSelect}
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">INTEGRATIONS</div>
+
+      <div class="settings-row">
+        <div class="settings-row-label">
+          <div class="settings-row-title">VirusTotal API key</div>
+          <div class="settings-row-hint">Used to look up domain reputation in request detail</div>
+        </div>
+        <div class="settings-vt-wrap">
+          <div class="settings-vt-input-row">
+            <input
+              type="password"
+              id="setting-vt-key"
+              class="settings-input"
+              value="${s.virustotal_api_key ? s.virustotal_api_key.replace(/./g, '●') : ''}"
+              data-real-value="${s.virustotal_api_key || ''}"
+              placeholder="Paste API key…"
+              autocomplete="off"
+              spellcheck="false"
+            >
+            <button type="button" class="settings-test-btn" id="settings-vt-test">TEST</button>
+          </div>
+          <span class="settings-vt-status" id="settings-vt-status"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-danger-zone">
+      <div class="settings-danger-label">
+        <div class="settings-danger-label-title">Clear all session data</div>
+        <div class="settings-danger-label-hint">Permanently deletes all recorded sessions, requests, and scores</div>
+      </div>
+      <button type="button" class="settings-danger-btn" id="settings-clear-data">CLEAR ALL DATA</button>
+    </div>`;
+
+  // Autoscroll toggle
+  document.getElementById('setting-autoscroll').addEventListener('change', (e) => {
+    saveSettingField('autoscroll_feed', e.target.checked);
+    settings.autoscroll_feed = e.target.checked;
+  });
+
+  // Retention select
+  document.getElementById('setting-retention').addEventListener('change', (e) => {
+    saveSettingField('data_retention_days', Number(e.target.value));
+  });
+
+  // VT key — clear placeholder on first focus so user can type a real key
+  const vtInput = document.getElementById('setting-vt-key');
+  vtInput.addEventListener('focus', () => {
+    if (vtInput.dataset.realValue != null) {
+      vtInput.type = 'text';
+      vtInput.value = vtInput.dataset.realValue;
+    }
+  });
+  vtInput.addEventListener('blur', async () => {
+    const key = vtInput.value.trim();
+    vtInput.dataset.realValue = key;
+    vtInput.type = 'password';
+    vtInput.value = key ? key.replace(/./g, '●') : '';
+    await saveSettingField('virustotal_api_key', key);
+  });
+
+  // VT test button
+  const vtStatus = document.getElementById('settings-vt-status');
+  const testBtn = document.getElementById('settings-vt-test');
+  testBtn.addEventListener('click', async () => {
+    const key = vtInput.dataset.realValue || vtInput.value.replace(/●/g, '').trim();
+    if (!key) {
+      vtStatus.textContent = 'Enter a key first';
+      vtStatus.className = 'settings-vt-status settings-vt-status--error';
+      return;
+    }
+    testBtn.textContent = '…';
+    testBtn.disabled = true;
+    vtStatus.textContent = '';
+    vtStatus.className = 'settings-vt-status';
+    try {
+      const resp = await fetch('https://www.virustotal.com/api/v3/domains/example.com', {
+        headers: { 'x-apikey': key },
+      });
+      if (resp.ok) {
+        vtStatus.textContent = 'Valid ✓';
+        vtStatus.className = 'settings-vt-status settings-vt-status--ok';
+        await saveSettingField('virustotal_api_key', key);
+      } else if (resp.status === 401 || resp.status === 403) {
+        vtStatus.textContent = 'Invalid key';
+        vtStatus.className = 'settings-vt-status settings-vt-status--error';
+      } else {
+        vtStatus.textContent = 'Error ' + resp.status;
+        vtStatus.className = 'settings-vt-status settings-vt-status--error';
+      }
+    } catch {
+      vtStatus.textContent = 'Network error';
+      vtStatus.className = 'settings-vt-status settings-vt-status--error';
+    } finally {
+      testBtn.textContent = 'TEST';
+      testBtn.disabled = false;
+    }
+  });
+
+  // Clear all data
+  const clearBtn = document.getElementById('settings-clear-data');
+  clearBtn.addEventListener('click', async () => {
+    if (clearBtn.dataset.confirm === 'pending') {
+      clearBtn.disabled = true;
+      try {
+        const all = await chrome.storage.local.get(null);
+        const keysToRemove = Object.keys(all).filter(
+          (k) => k.startsWith('requests:') || k.startsWith('scores:') || k === 'sessions:history'
+        );
+        if (keysToRemove.length > 0) await chrome.storage.local.remove(keysToRemove);
+        // Reset active session state
+        await chrome.storage.local.set({
+          'session:current': null,
+          'session:paused': false,
+          'session:elapsed_frozen': 0,
+        });
+        clearBtn.textContent = 'CLEARED ✓';
+        clearBtn.className = 'settings-danger-btn settings-danger-btn--success';
+        clearBtn.dataset.confirm = '';
+        setTimeout(() => {
+          clearBtn.textContent = 'CLEAR ALL DATA';
+          clearBtn.className = 'settings-danger-btn';
+          clearBtn.disabled = false;
+        }, 2500);
+      } catch {
+        clearBtn.textContent = 'CLEAR ALL DATA';
+        clearBtn.className = 'settings-danger-btn';
+        clearBtn.dataset.confirm = '';
+        clearBtn.disabled = false;
+      }
+    } else {
+      clearBtn.textContent = 'CONFIRM — CANNOT UNDO';
+      clearBtn.dataset.confirm = 'pending';
+      clearBtn.className = 'settings-danger-btn settings-danger-btn--confirm';
+      setTimeout(() => {
+        if (clearBtn.dataset.confirm === 'pending') {
+          clearBtn.textContent = 'CLEAR ALL DATA';
+          clearBtn.dataset.confirm = '';
+          clearBtn.className = 'settings-danger-btn';
+        }
+      }, 3500);
+    }
+  });
+}
+
+function initSettingsOverlay() {
+  const navBtn = document.getElementById('settings-nav-btn');
+  if (navBtn) {
+    navBtn.addEventListener('click', () => {
+      if (settingsOverlayOpen()) {
+        closeSettingsOverlay();
+        navBtn.classList.remove('active');
+      } else {
+        // Close history if open
+        if (historyOverlayOpen()) {
+          closeHistoryOverlay();
+          const histBtn = document.getElementById('history-nav-btn');
+          if (histBtn) histBtn.classList.remove('active');
+        }
+        openSettingsOverlay();
+        navBtn.classList.add('active');
+      }
+    });
+  }
+  const backBtn = document.getElementById('settings-back-btn');
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      closeSettingsOverlay();
+      if (navBtn) navBtn.classList.remove('active');
+    });
+  }
+}
+
 function initHistoryOverlay() {
   const navBtn = document.getElementById('history-nav-btn');
   if (navBtn) {
@@ -3187,6 +3455,254 @@ function initHistoryOverlay() {
       if (navBtn) navBtn.classList.remove('active');
     });
   }
+}
+
+// ── Training Crawl ────────────────────────────────────────────────────────────
+
+let CRAWL_SITES = [];
+
+async function loadCrawlSites() {
+  if (CRAWL_SITES.length > 0) return;
+  try {
+    const res  = await fetch(chrome.runtime.getURL('data/sites.txt'));
+    const text = await res.text();
+    CRAWL_SITES = text.split('\n')
+      .map(l => l.trim())
+      .filter(l => l && !l.startsWith('#'));
+  } catch (e) {
+    console.warn('[Specter] Failed to load sites.txt:', e);
+  }
+}
+
+const CRAWL_DWELL_MS = 6000;
+let crawlRunning      = false;
+let crawlStartedAt    = 0;
+let crawlReqCount     = 0;
+let crawlTrackerCount = 0;
+let crawlVisited      = []; // URLs visited so far, most recent first
+
+function fmtDuration(ms) {
+  if (ms <= 0) return '—';
+  const s = Math.round(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h > 0)  return `${h}h ${m % 60}m`;
+  if (m > 0)  return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+function crawlOverlayOpen() {
+  const el = document.getElementById('crawl-overlay');
+  return el ? el.classList.contains('crawl-overlay--open') : false;
+}
+function openCrawlOverlay() {
+  const el = document.getElementById('crawl-overlay');
+  if (el) { el.classList.add('crawl-overlay--open'); el.removeAttribute('aria-hidden'); }
+  renderCrawlPanel({ running: crawlRunning, index: 0, total: CRAWL_SITES.length, url: '' });
+}
+function closeCrawlOverlay() {
+  const el = document.getElementById('crawl-overlay');
+  if (el) { el.classList.remove('crawl-overlay--open'); el.setAttribute('aria-hidden', 'true'); }
+}
+
+function renderCrawlPanel({ running, index, total, url, done, doneTotal }) {
+  const body = document.getElementById('crawl-overlay-body');
+  if (!body) return;
+
+  const pct = total > 0 ? Math.round((index / total) * 100) : 0;
+
+  if (done) {
+    const totalTime = crawlStartedAt ? fmtDuration(Date.now() - crawlStartedAt) : '—';
+    const trackerRate = crawlReqCount > 0 ? ((crawlTrackerCount / crawlReqCount) * 100).toFixed(1) : '0.0';
+    body.innerHTML = `
+      <p class="crawl-done-msg">✓ Crawl complete — ${doneTotal} sites visited in ${totalTime}.</p>
+      <div class="crawl-stats-row">
+        <div class="crawl-stat">
+          <div class="crawl-stat-value">${crawlReqCount.toLocaleString()}</div>
+          <div class="crawl-stat-label">REQUESTS</div>
+        </div>
+        <div class="crawl-stat">
+          <div class="crawl-stat-value crawl-stat-value--accent">${crawlTrackerCount.toLocaleString()}</div>
+          <div class="crawl-stat-label">TRACKERS</div>
+        </div>
+        <div class="crawl-stat">
+          <div class="crawl-stat-value">${trackerRate}%</div>
+          <div class="crawl-stat-label">TRACKER RATE</div>
+        </div>
+      </div>
+      <p class="crawl-info">Stop your Specter session and use the FULL EXPORT button in Session History to save the training data.</p>
+      ${crawlVisited.length > 0 ? `
+      <div class="crawl-visited-wrap">
+        <div class="crawl-visited-label">SITES VISITED <span class="crawl-visited-count">${crawlVisited.length}</span></div>
+        <div class="crawl-visited-list">
+          ${crawlVisited.map(u => `<div class="crawl-visited-item">${u}</div>`).join('')}
+        </div>
+      </div>` : ''}
+      <button class="crawl-start-btn" id="crawl-start-btn">START NEW CRAWL</button>`;
+    body.querySelector('#crawl-start-btn').addEventListener('click', () => startCrawl());
+    return;
+  }
+
+  if (running) {
+    const now = Date.now();
+    const elapsed = crawlStartedAt ? fmtDuration(now - crawlStartedAt) : '—';
+    const etaMs = crawlStartedAt && index > 0
+      ? ((now - crawlStartedAt) / index) * (total - index)
+      : null;
+    const eta = etaMs != null ? '~' + fmtDuration(etaMs) : '—';
+
+    body.innerHTML = `
+      <div class="crawl-progress-wrap">
+        <div class="crawl-progress-label">
+          <span>PROGRESS</span>
+          <span>${index} / ${total} <span class="crawl-pct">${pct}%</span></span>
+        </div>
+        <div class="crawl-progress-track"><div class="crawl-progress-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="crawl-current-url" id="crawl-current-url">${url || '—'}</div>
+      <div class="crawl-stats-row">
+        <div class="crawl-stat">
+          <div class="crawl-stat-value" id="crawl-stat-elapsed">${elapsed}</div>
+          <div class="crawl-stat-label">ELAPSED</div>
+        </div>
+        <div class="crawl-stat">
+          <div class="crawl-stat-value" id="crawl-stat-eta">${eta}</div>
+          <div class="crawl-stat-label">ETA</div>
+        </div>
+        <div class="crawl-stat">
+          <div class="crawl-stat-value" id="crawl-stat-requests">${crawlReqCount.toLocaleString()}</div>
+          <div class="crawl-stat-label">REQUESTS</div>
+        </div>
+        <div class="crawl-stat">
+          <div class="crawl-stat-value crawl-stat-value--accent" id="crawl-stat-trackers">${crawlTrackerCount.toLocaleString()}</div>
+          <div class="crawl-stat-label">TRACKERS</div>
+        </div>
+      </div>
+      <button class="crawl-stop-btn" id="crawl-stop-btn">■ STOP CRAWL</button>
+      ${crawlVisited.length > 0 ? `
+      <div class="crawl-visited-wrap">
+        <div class="crawl-visited-label">VISITED <span class="crawl-visited-count">${crawlVisited.length}</span></div>
+        <div class="crawl-visited-list" id="crawl-visited-list">
+          ${crawlVisited.map(u => `<div class="crawl-visited-item">${u}</div>`).join('')}
+        </div>
+      </div>` : ''}`;
+    body.querySelector('#crawl-stop-btn').addEventListener('click', () => stopCrawl());
+    return;
+  }
+
+  // idle state — check if session is active
+  chrome.storage.local.get('session:current').then((r) => {
+    const sessionActive = r['session:current']?.active;
+    body.innerHTML = `
+      ${!sessionActive ? `<p class="crawl-warning">⚠ No active session — start a Specter session before crawling so requests are recorded.</p>` : ''}
+      <p class="crawl-info">A background tab is opened and navigated automatically — webRequest captures all traffic normally.</p>
+      <div class="crawl-sites-wrap">
+        <div class="crawl-sites-header">
+          <span class="crawl-sites-label">SITES TO VISIT</span>
+          <span class="crawl-sites-hint" id="crawl-sites-hint">default list · ${CRAWL_SITES.length} sites</span>
+        </div>
+        <textarea class="crawl-textarea" id="crawl-sites-input"
+          placeholder="Leave blank to use the default list (${CRAWL_SITES.length} sites)&#10;&#10;Or enter URLs to crawl, one per line:&#10;https://example.com&#10;https://another-site.com"></textarea>
+      </div>
+      <button class="crawl-start-btn" id="crawl-start-btn">▶ START CRAWL</button>`;
+    const ta   = body.querySelector('#crawl-sites-input');
+    const hint = body.querySelector('#crawl-sites-hint');
+    ta.addEventListener('input', () => {
+      const urls = ta.value.trim().split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      if (ta.value.trim()) {
+        hint.textContent = `custom · ${urls.length} site${urls.length !== 1 ? 's' : ''}`;
+        hint.className = 'crawl-sites-hint crawl-sites-hint--custom';
+      } else {
+        hint.textContent = `default list · ${CRAWL_SITES.length} sites`;
+        hint.className = 'crawl-sites-hint';
+      }
+    });
+    body.querySelector('#crawl-start-btn').addEventListener('click', () => startCrawl());
+  });
+}
+
+function normalizeCrawlUrl(u) {
+  return /^https?:\/\//i.test(u) ? u : 'https://' + u;
+}
+function startCrawl() {
+  const ta = document.getElementById('crawl-sites-input');
+  const customText = ta ? ta.value.trim() : '';
+  const urls = customText
+    ? customText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(normalizeCrawlUrl)
+    : CRAWL_SITES;
+  if (urls.length === 0) return;
+  crawlRunning      = true;
+  crawlStartedAt    = Date.now();
+  crawlReqCount     = 0;
+  crawlTrackerCount = 0;
+  crawlVisited      = [];
+  renderCrawlPanel({ running: true, index: 0, total: urls.length, url: '' });
+  chrome.runtime.sendMessage({ type: 'start_crawl', urls, dwell_ms: CRAWL_DWELL_MS });
+}
+
+function stopCrawl() {
+  crawlRunning = false;
+  chrome.runtime.sendMessage({ type: 'stop_crawl' });
+  renderCrawlPanel({ running: false, index: 0, total: CRAWL_SITES.length, url: '' });
+}
+
+async function initCrawlOverlay() {
+  await loadCrawlSites();
+  const navBtn  = document.getElementById('crawl-nav-btn');
+  const backBtn = document.getElementById('crawl-back-btn');
+
+  if (navBtn) {
+    navBtn.addEventListener('click', () => {
+      if (crawlOverlayOpen()) {
+        closeCrawlOverlay();
+        navBtn.classList.remove('active');
+      } else {
+        openCrawlOverlay();
+        navBtn.classList.add('active');
+      }
+    });
+  }
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      closeCrawlOverlay();
+      if (navBtn) navBtn.classList.remove('active');
+    });
+  }
+
+  // Listen for crawl broadcast messages from SW
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'crawl_started') {
+      crawlRunning = true;
+      if (!crawlStartedAt) crawlStartedAt = Date.now();
+    }
+    if (message.type === 'crawl_progress') {
+      if (message.startedAt) crawlStartedAt = message.startedAt;
+      if (message.url) crawlVisited.unshift(message.url); // most recent first
+      if (crawlOverlayOpen()) {
+        renderCrawlPanel({ running: true, index: message.index, total: message.total, url: message.url });
+      }
+    }
+    if (message.type === 'crawl_done') {
+      crawlRunning = false;
+      if (crawlOverlayOpen()) renderCrawlPanel({ done: true, doneTotal: message.total });
+    }
+    if (message.type === 'crawl_stopped') {
+      crawlRunning = false;
+      if (crawlOverlayOpen()) renderCrawlPanel({ running: false, index: 0, total: CRAWL_SITES.length, url: '' });
+    }
+    // Count requests + trackers live — update in-place so no full re-render per request
+    if (message.type === 'request_update' && crawlRunning) {
+      crawlReqCount++;
+      const cat = message.request?.category;
+      if (cat && cat !== 'legitimate' && cat !== 'unclassified') crawlTrackerCount++;
+      const reqEl = document.getElementById('crawl-stat-requests');
+      const trkEl = document.getElementById('crawl-stat-trackers');
+      const elEl  = document.getElementById('crawl-stat-elapsed');
+      if (reqEl) reqEl.textContent = crawlReqCount.toLocaleString();
+      if (trkEl) trkEl.textContent = crawlTrackerCount.toLocaleString();
+      if (elEl && crawlStartedAt) elEl.textContent = fmtDuration(Date.now() - crawlStartedAt);
+    }
+  });
 }
 
 if (document.readyState === 'loading') {

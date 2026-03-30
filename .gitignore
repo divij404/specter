@@ -4,5 +4,8 @@ _planning/
 # Dependencies
 node_modules/
 
-# Bundled libs (run: npm install && node scripts/bundle-libs.js)
+# Bundled libs 
 extension/lib/
+
+# Crawl exports 
+tools/exports/

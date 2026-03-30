@@ -1,80 +1,56 @@
 /* Specter — popup script */
 
-const btnStart = document.getElementById('btn-start');
-const btnStop = document.getElementById('btn-stop');
-const btnPause = document.getElementById('btn-pause');
-const linkDashboard = document.getElementById('open-dashboard');
-const btnCopyReport = document.getElementById('btn-copy-report');
-const statusDot = document.getElementById('status-dot');
-const statusLabel = document.getElementById('status-label');
-const timerEl = document.getElementById('timer');
+const statusPill    = document.getElementById('status-pill');
+const statusLabel   = document.getElementById('status-label');
+const timerEl       = document.getElementById('timer');
 const currentSiteEl = document.getElementById('current-site');
-const privacyScoreEl = document.getElementById('privacy-score');
-const trackerCountEl = document.getElementById('tracker-count');
-const siteRow = document.getElementById('site-row');
-const popupContent = document.getElementById('popup-content');
+const scoreEl       = document.getElementById('privacy-score');
+const trackerEl     = document.getElementById('tracker-count');
+const actionsEl     = document.getElementById('popup-actions');
+const dashboardLink = document.getElementById('open-dashboard');
+const copyBtn       = document.getElementById('btn-copy-report');
 
 let timerInterval = null;
 let currentDomain = '';
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function eTLDPlusOne(hostname) {
   if (!hostname) return '';
   const parts = hostname.split('.');
-  if (parts.length <= 2) return hostname;
-  return parts.slice(-2).join('.');
-}
-
-function setSessionState(active, paused) {
-  btnStart.disabled = !!active;
-  btnStop.disabled = !active;
-  btnPause.disabled = !active;
-  if (btnPause) {
-    btnPause.textContent = paused ? 'Resume' : 'Pause';
-    btnPause.title = paused ? 'Resume recording' : 'Pause recording';
-  }
-  if (popupContent) popupContent.classList.toggle('recording', !!active);
-  if (linkDashboard) {
-    linkDashboard.className = 'popup-btn ' + (active ? 'popup-btn--ghost' : 'popup-btn--primary');
-  }
-  if (!active) {
-    statusDot.className = 'popup-status-dot popup-status-dot--stopped';
-    statusLabel.textContent = 'STOPPED';
-    stopTimer();
-  } else if (paused) {
-    statusDot.className = 'popup-status-dot popup-status-dot--paused';
-    statusLabel.textContent = 'PAUSED';
-    stopTimer();
-  } else {
-    statusDot.className = 'popup-status-dot popup-status-dot--recording';
-    statusLabel.textContent = 'RECORDING';
-    startTimer();
-  }
+  return parts.length <= 2 ? hostname : parts.slice(-2).join('.');
 }
 
 function formatElapsed(ms) {
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
-  return [m, s].map((n) => String(n).padStart(2, '0')).join(':');
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return [h, m, sec].map((n) => String(n).padStart(2, '0')).join(':');
+  return [m, sec].map((n) => String(n).padStart(2, '0')).join(':');
 }
+
+function scoreClass(score) {
+  if (score == null) return '';
+  if (score >= 75) return 'score--high';
+  if (score >= 45) return 'score--mid';
+  return 'score--low';
+}
+
+// ─── Timer ────────────────────────────────────────────────────────────────────
 
 function startTimer() {
   stopTimer();
   function tick() {
-    chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (result) => {
-      const session = result['session:current'];
-      if (!session || !session.active) {
-        stopTimer();
-        return;
-      }
-      if (result['session:paused']) {
-        const sec = Math.max(0, Number(result['session:elapsed_frozen']) || 0);
+    chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (r) => {
+      const session = r['session:current'];
+      if (!session || !session.active) { stopTimer(); return; }
+      if (r['session:paused']) {
+        const sec = Math.max(0, Number(r['session:elapsed_frozen']) || 0);
         timerEl.textContent = formatElapsed(sec * 1000);
-        return;
+      } else {
+        timerEl.textContent = formatElapsed(Date.now() - session.started_at);
       }
-      timerEl.textContent = formatElapsed(Date.now() - session.started_at);
     });
   }
   tick();
@@ -82,24 +58,79 @@ function startTimer() {
 }
 
 function stopTimer() {
-  if (timerInterval) {
-    clearInterval(timerInterval);
-    timerInterval = null;
-  }
-  timerEl.textContent = '00:00';
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+  timerEl.textContent = '';
 }
 
-function scoreColorClass(score) {
-  if (score == null || score === undefined) return 'popup-score--none';
-  if (score >= 80) return 'popup-score--high';
-  if (score >= 50) return 'popup-score--mid';
-  return 'popup-score--low';
+// ─── Actions ──────────────────────────────────────────────────────────────────
+
+function renderActions(state) {
+  actionsEl.innerHTML = '';
+
+  function btn(cls, label, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'popup-action-btn popup-action-btn--' + cls;
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  if (state === 'stopped') {
+    actionsEl.appendChild(btn('start', '▶  START SESSION', () => {
+      chrome.runtime.sendMessage({ type: 'start_session' }, () => refreshUI());
+    }));
+
+  } else if (state === 'recording') {
+    actionsEl.appendChild(btn('pause', '⏸  PAUSE', () => {
+      chrome.storage.local.get('session:current', (r) => {
+        const session = r['session:current'];
+        if (!session || !session.active) return;
+        const elapsed = Math.floor((Date.now() - session.started_at) / 1000);
+        chrome.runtime.sendMessage({ type: 'pause_session', elapsed_seconds: elapsed }, () => refreshUI());
+      });
+    }));
+    actionsEl.appendChild(btn('stop', '■  STOP', () => {
+      chrome.runtime.sendMessage({ type: 'stop_session' }, () => refreshUI());
+    }));
+
+  } else if (state === 'paused') {
+    actionsEl.appendChild(btn('resume', '▶  RESUME', () => {
+      chrome.runtime.sendMessage({ type: 'resume_session' }, () => refreshUI());
+    }));
+    actionsEl.appendChild(btn('stop', '■  STOP', () => {
+      chrome.runtime.sendMessage({ type: 'stop_session' }, () => refreshUI());
+    }));
+  }
 }
+
+// ─── State update ─────────────────────────────────────────────────────────────
+
+function setUIState(active, paused) {
+  const state = !active ? 'stopped' : paused ? 'paused' : 'recording';
+  statusPill.dataset.state = state;
+  statusLabel.textContent = state.toUpperCase();
+  renderActions(state);
+
+  if (state === 'recording') {
+    startTimer();
+  } else {
+    stopTimer();
+    if (state === 'paused') {
+      chrome.storage.local.get('session:elapsed_frozen', (r) => {
+        const sec = Math.max(0, Number(r['session:elapsed_frozen']) || 0);
+        timerEl.textContent = formatElapsed(sec * 1000);
+      });
+    }
+  }
+}
+
+// ─── Full UI refresh ──────────────────────────────────────────────────────────
 
 function refreshUI() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tab = tabs[0];
-    if (tab && tab.url && (tab.url.startsWith('http:') || tab.url.startsWith('https:'))) {
+    if (tab?.url?.startsWith('http')) {
       try {
         currentDomain = eTLDPlusOne(new URL(tab.url).hostname);
         currentSiteEl.textContent = currentDomain;
@@ -112,133 +143,93 @@ function refreshUI() {
       currentSiteEl.textContent = '—';
     }
 
-    chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (result) => {
-      const session = result['session:current'];
-      const active = session && session.active;
-      const paused = !!(active && result['session:paused']);
-      setSessionState(active, paused);
+    chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (data) => {
+      const session = data['session:current'];
+      const active  = !!(session && session.active);
+      const paused  = !!(active && data['session:paused']);
 
-      if (active && paused) {
-        const sec = Math.max(0, Number(result['session:elapsed_frozen']) || 0);
-        timerEl.textContent = formatElapsed(sec * 1000);
-      }
+      setUIState(active, paused);
 
       if (!active) {
-        privacyScoreEl.textContent = '—';
-        privacyScoreEl.className = 'popup-score popup-score--none';
-        trackerCountEl.textContent = '0 trackers detected';
-        trackerCountEl.classList.remove('popup-tracker-count--scanning');
-        if (siteRow) siteRow.classList.remove('popup-site-row--compact');
+        scoreEl.textContent = '—';
+        scoreEl.className = 'popup-score-number';
+        trackerEl.textContent = '—';
+        trackerEl.classList.remove('popup-tracker-count--scanning');
         return;
       }
 
-      const scoresKey = 'scores:' + session.id;
-      chrome.storage.local.get([scoresKey], (res) => {
-        const scores = res[scoresKey] || {};
-        const entry = currentDomain ? scores[currentDomain] : null;
-        if (siteRow) siteRow.classList.toggle('popup-site-row--compact', !entry);
+      chrome.storage.local.get('scores:' + session.id, (res) => {
+        const scores = res['scores:' + session.id] || {};
+        const entry  = currentDomain ? scores[currentDomain] : null;
+
         if (entry) {
-          privacyScoreEl.textContent = String(entry.privacy_score);
-          privacyScoreEl.className = 'popup-score ' + scoreColorClass(entry.privacy_score);
+          const s = entry.privacy_score;
+          scoreEl.textContent = String(s);
+          scoreEl.className = 'popup-score-number ' + scoreClass(s);
           const n = entry.tracker_requests || 0;
-          trackerCountEl.textContent = n + ' tracker' + (n === 1 ? '' : 's') + ' detected';
-          trackerCountEl.classList.remove('popup-tracker-count--scanning');
+          trackerEl.textContent = n + ' tracker' + (n === 1 ? '' : 's') + ' detected';
+          trackerEl.classList.remove('popup-tracker-count--scanning');
         } else {
-          privacyScoreEl.textContent = '—';
-          privacyScoreEl.className = 'popup-score popup-score--none';
-          trackerCountEl.textContent = 'Scanning…';
-          trackerCountEl.classList.add('popup-tracker-count--scanning');
+          scoreEl.textContent = '—';
+          scoreEl.className = 'popup-score-number';
+          trackerEl.textContent = 'Scanning…';
+          trackerEl.classList.add('popup-tracker-count--scanning');
         }
       });
     });
   });
 }
 
-btnStart.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'start_session' }, () => {
-    refreshUI();
-  });
-});
+// ─── Dashboard link ───────────────────────────────────────────────────────────
 
-btnStop.addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'stop_session' }, () => {
-    refreshUI();
-  });
-});
-
-if (btnPause) {
-  btnPause.addEventListener('click', () => {
-    chrome.storage.local.get(['session:current', 'session:paused'], (result) => {
-      const session = result['session:current'];
-      const paused = !!result['session:paused'];
-      if (!session || !session.active) return;
-      if (paused) {
-        chrome.runtime.sendMessage({ type: 'resume_session' }, () => refreshUI());
-      } else {
-        const elapsedSeconds = Math.floor((Date.now() - session.started_at) / 1000);
-        chrome.runtime.sendMessage({ type: 'pause_session', elapsed_seconds: elapsedSeconds }, () => refreshUI());
-      }
-    });
-  });
-}
-
-linkDashboard.addEventListener('click', (e) => {
+dashboardLink.addEventListener('click', (e) => {
   e.preventDefault();
   chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
 });
 
-btnCopyReport.addEventListener('click', () => {
-  chrome.storage.local.get(['session:current'], (result) => {
-    const session = result['session:current'];
-    const site = currentDomain || 'No site';
-    let score = '—';
-    let trackers = '0';
+// ─── Copy report ──────────────────────────────────────────────────────────────
+
+copyBtn.addEventListener('click', () => {
+  chrome.storage.local.get('session:current', (r) => {
+    const session = r['session:current'];
+    const site = currentDomain || '—';
+    const buildText = (score, trackers) => [
+      'Specter Privacy Report',
+      '─────────────────────',
+      'Site:              ' + site,
+      'Privacy score:     ' + (score != null ? score + '/100' : '—'),
+      'Trackers detected: ' + (trackers != null ? trackers : '—'),
+      '',
+      'Generated by Specter',
+    ].join('\n');
+
     if (session && session.active) {
-      const scoresKey = 'scores:' + session.id;
-      chrome.storage.local.get([scoresKey], (res) => {
-        const scores = res[scoresKey] || {};
-        const entry = currentDomain ? scores[currentDomain] : null;
-        if (entry) {
-          score = String(entry.privacy_score);
-          trackers = String(entry.tracker_requests || 0);
-        }
-        const text = [
-          'Specter Report',
-          'Site: ' + site,
-          'Privacy score: ' + score,
-          'Trackers detected: ' + trackers,
-          '',
-          'Generated by Specter (Chrome extension)',
-        ].join('\n');
-        navigator.clipboard.writeText(text).then(() => {
-          const orig = btnCopyReport.textContent;
-          btnCopyReport.textContent = 'Copied';
-          setTimeout(() => { btnCopyReport.textContent = orig; }, 1500);
-        });
+      chrome.storage.local.get('scores:' + session.id, (res) => {
+        const entry = (res['scores:' + session.id] || {})[currentDomain];
+        const text = buildText(entry?.privacy_score, entry?.tracker_requests);
+        navigator.clipboard.writeText(text).then(() => flashBtn(copyBtn, 'Copied ✓'));
       });
     } else {
-      const text = [
-        'Specter Report',
-        'Site: ' + site,
-        'Privacy score: ' + score,
-        'Trackers detected: ' + trackers,
-        '',
-        'Generated by Specter (Chrome extension)',
-      ].join('\n');
-      navigator.clipboard.writeText(text).then(() => {
-        const orig = btnCopyReport.textContent;
-        btnCopyReport.textContent = 'Copied';
-        setTimeout(() => { btnCopyReport.textContent = orig; }, 1500);
-      });
+      navigator.clipboard.writeText(buildText(null, null)).then(() => flashBtn(copyBtn, 'Copied ✓'));
     }
   });
 });
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local') return;
-  if (changes['session:current'] || changes['session:paused'] || changes['session:elapsed_frozen'] || (currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:')))) {
-    refreshUI();
-  }
+function flashBtn(btn, label) {
+  const orig = btn.textContent;
+  btn.textContent = label;
+  setTimeout(() => { btn.textContent = orig; }, 1500);
+}
+
+// ─── Reactive updates ─────────────────────────────────────────────────────────
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  const relevant = ['session:current', 'session:paused', 'session:elapsed_frozen'];
+  const hasScoreChange = currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:'));
+  if (relevant.some((k) => k in changes) || hasScoreChange) refreshUI();
 });
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
 
 refreshUI();
