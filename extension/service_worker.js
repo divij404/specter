@@ -260,7 +260,7 @@ function classifyRuleBased(features) {
   if (features.subdomain_is_tracker && features.loads_as_script && features.is_third_party)
                                                 add('fingerprinting', 'tracker_subdomain_script', 0.40);
   if (features.has_cors_header && features.loads_as_script && features.is_third_party)
-                                                add('fingerprinting', 'cors_third_party_script', 0.25);
+                                                add('fingerprinting', 'cors_third_party_script', 0.20);
 
   // ── Analytics ───────────────────────────────────────────────────────────
   if (features.domain_matches_analytics)        add('analytics', 'analytics_domain',            0.88);
@@ -594,23 +594,27 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const nextUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : 'https://' + rawUrl;
   state.index++;
 
-  // Wrap everything in an outer try-catch so that even if tab navigation fails
-  // completely, we still schedule the next alarm and keep the chain alive.
+  // Wrap in try/catch so navigation failures don't kill the alarm chain.
+  // If tabs.create fails, clear tabId so the next dwell does not reuse a dead id.
   try {
-    // Chrome Memory Saver can silently discard background tabs after ~30-60 min
-    // of no user interaction. Detect and recreate rather than aborting.
-    try {
-      const tab = await chrome.tabs.get(state.tabId);
-      if (tab.discarded) throw new Error('discarded');
-      await chrome.tabs.update(state.tabId, { url: nextUrl });
-    } catch {
-      // Tab closed, discarded, or invalid URL on update — open a fresh one
+    let navigated = false;
+    if (state.tabId != null) {
+      try {
+        const tab = await chrome.tabs.get(state.tabId);
+        if (tab.discarded) throw new Error('discarded');
+        await chrome.tabs.update(state.tabId, { url: nextUrl });
+        navigated = true;
+      } catch {
+        /* tab missing, discarded, or update failed — create below */
+      }
+    }
+    if (!navigated) {
       const newTab = await chrome.tabs.create({ url: nextUrl, active: false });
       state.tabId = newTab.id;
     }
   } catch (err) {
-    // tabs.create also failed (e.g. bad URL, Chrome error) — skip this site
     console.warn('[Specter] crawl: could not navigate to', nextUrl, err);
+    state.tabId = null;
   }
 
   await saveCrawlState(state);

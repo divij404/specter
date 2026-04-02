@@ -2757,6 +2757,10 @@ function init() {
         closeHistoryOverlay();
         const histBtn = document.getElementById('history-nav-btn');
         if (histBtn) histBtn.classList.remove('active');
+      } else if (crawlOverlayOpen()) {
+        closeCrawlOverlay();
+        const crawlBtn = document.getElementById('crawl-nav-btn');
+        if (crawlBtn) crawlBtn.classList.remove('active');
       } else {
         closeDetailPanel();
       }
@@ -3480,6 +3484,10 @@ let crawlStartedAt    = 0;
 let crawlReqCount     = 0;
 let crawlTrackerCount = 0;
 let crawlVisited      = []; // URLs visited so far, most recent first
+/** Sites in the current/last crawl (custom or default); synced from start + service worker messages */
+let crawlUrlCount = 0;
+let crawlProgressIndex = 0;
+let crawlCurrentUrl = '';
 
 function fmtDuration(ms) {
   if (ms <= 0) return '—';
@@ -3498,7 +3506,12 @@ function crawlOverlayOpen() {
 function openCrawlOverlay() {
   const el = document.getElementById('crawl-overlay');
   if (el) { el.classList.add('crawl-overlay--open'); el.removeAttribute('aria-hidden'); }
-  renderCrawlPanel({ running: crawlRunning, index: 0, total: CRAWL_SITES.length, url: '' });
+  renderCrawlPanel({
+    running: crawlRunning,
+    index: crawlProgressIndex,
+    total: crawlUrlCount || CRAWL_SITES.length,
+    url: crawlCurrentUrl,
+  });
 }
 function closeCrawlOverlay() {
   const el = document.getElementById('crawl-overlay');
@@ -3636,6 +3649,9 @@ function startCrawl() {
   crawlReqCount     = 0;
   crawlTrackerCount = 0;
   crawlVisited      = [];
+  crawlUrlCount     = urls.length;
+  crawlProgressIndex = 0;
+  crawlCurrentUrl   = '';
   renderCrawlPanel({ running: true, index: 0, total: urls.length, url: '' });
   chrome.runtime.sendMessage({ type: 'start_crawl', urls, dwell_ms: CRAWL_DWELL_MS });
 }
@@ -3643,11 +3659,47 @@ function startCrawl() {
 function stopCrawl() {
   crawlRunning = false;
   chrome.runtime.sendMessage({ type: 'stop_crawl' });
-  renderCrawlPanel({ running: false, index: 0, total: CRAWL_SITES.length, url: '' });
+  crawlProgressIndex = 0;
+  crawlCurrentUrl = '';
+  renderCrawlPanel({
+    running: false,
+    index: 0,
+    total: crawlUrlCount || CRAWL_SITES.length,
+    url: '',
+  });
+}
+
+/**
+ * After dashboard reload, in-memory crawl flags are lost but the service worker
+ * keeps `crawl:state` in session storage while a crawl runs. Restore flags so
+ * `request_update` can keep incrementing crawl stat counters.
+ */
+async function restoreCrawlStateFromSession() {
+  try {
+    const r = await chrome.storage.session.get('crawl:state');
+    const state = r['crawl:state'];
+    if (!state || !state.active || !Array.isArray(state.urls) || state.urls.length === 0) return;
+
+    crawlRunning = true;
+    crawlUrlCount = state.urls.length;
+    crawlStartedAt =
+      typeof state.startedAt === 'number' && Number.isFinite(state.startedAt) ? state.startedAt : Date.now();
+    if (typeof state.index === 'number' && Number.isFinite(state.index) && state.index >= 0) {
+      crawlProgressIndex = state.index;
+    }
+    const n = Math.min(state.index, state.urls.length);
+    const chronological = state.urls.slice(0, n);
+    crawlVisited = chronological.slice().reverse();
+    const lastI = n - 1;
+    crawlCurrentUrl = lastI >= 0 ? normalizeCrawlUrl(state.urls[lastI]) : '';
+  } catch (e) {
+    console.warn('[Specter] restoreCrawlStateFromSession:', e);
+  }
 }
 
 async function initCrawlOverlay() {
   await loadCrawlSites();
+  await restoreCrawlStateFromSession();
   const navBtn  = document.getElementById('crawl-nav-btn');
   const backBtn = document.getElementById('crawl-back-btn');
 
@@ -3673,22 +3725,58 @@ async function initCrawlOverlay() {
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'crawl_started') {
       crawlRunning = true;
+      if (typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0) {
+        crawlUrlCount = message.total;
+      }
       if (!crawlStartedAt) crawlStartedAt = Date.now();
     }
     if (message.type === 'crawl_progress') {
       if (message.startedAt) crawlStartedAt = message.startedAt;
-      if (message.url) crawlVisited.unshift(message.url); // most recent first
+      if (typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0) {
+        crawlUrlCount = message.total;
+      }
+      if (typeof message.index === 'number' && Number.isFinite(message.index) && message.index >= 0) {
+        crawlProgressIndex = message.index;
+      }
+      if (typeof message.url === 'string' && message.url) {
+        crawlVisited.unshift(message.url);
+        crawlCurrentUrl = message.url;
+      }
       if (crawlOverlayOpen()) {
-        renderCrawlPanel({ running: true, index: message.index, total: message.total, url: message.url });
+        const totalUi = Math.max(1, crawlUrlCount || CRAWL_SITES.length || 1);
+        renderCrawlPanel({
+          running: true,
+          index: crawlProgressIndex,
+          total: totalUi,
+          url: crawlCurrentUrl,
+        });
       }
     }
     if (message.type === 'crawl_done') {
       crawlRunning = false;
-      if (crawlOverlayOpen()) renderCrawlPanel({ done: true, doneTotal: message.total });
+      if (typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0) {
+        crawlUrlCount = message.total;
+      }
+      if (crawlOverlayOpen()) {
+        const doneTotal =
+          typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0
+            ? message.total
+            : crawlUrlCount;
+        renderCrawlPanel({ done: true, doneTotal: Math.max(0, doneTotal || 0) });
+      }
     }
     if (message.type === 'crawl_stopped') {
       crawlRunning = false;
-      if (crawlOverlayOpen()) renderCrawlPanel({ running: false, index: 0, total: CRAWL_SITES.length, url: '' });
+      crawlProgressIndex = 0;
+      crawlCurrentUrl = '';
+      if (crawlOverlayOpen()) {
+        renderCrawlPanel({
+          running: false,
+          index: 0,
+          total: crawlUrlCount || CRAWL_SITES.length,
+          url: '',
+        });
+      }
     }
     // Count requests + trackers live — update in-place so no full re-render per request
     if (message.type === 'request_update' && crawlRunning) {
