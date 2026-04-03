@@ -12,16 +12,6 @@
     <img src="icons/brand/logo.svg" alt="" class="specter-logo specter-logo--dashboard">
     <span class="dashboard-logo">SPECTER</span>
     <span class="dashboard-nav-spacer"></span>
-    <button type="button" class="nav-icon-btn" id="crawl-nav-btn" aria-label="Training crawl" title="Training Crawl">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <line x1="8" y1="1" x2="8" y2="4"/>
-        <line x1="8" y1="4" x2="4" y2="8"/>
-        <line x1="8" y1="4" x2="12" y2="8"/>
-        <circle cx="4" cy="9.5" r="1.5"/>
-        <circle cx="8" cy="14" r="1.5"/>
-        <circle cx="12" cy="9.5" r="1.5"/>
-      </svg>
-    </button>
     <button type="button" class="nav-icon-btn" id="history-nav-btn" aria-label="Session history" title="Session History">
       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="8" cy="8" r="6"/>
@@ -142,21 +132,6 @@
       </div>
     </aside>
   </main>
-  <!-- Crawl overlay -->
-  <div id="crawl-overlay" class="crawl-overlay" aria-hidden="true">
-    <div class="history-overlay-header">
-      <button type="button" class="history-back-btn" id="crawl-back-btn" aria-label="Back to dashboard">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="10,3 5,8 10,13"/>
-        </svg>
-      </button>
-      <span class="history-overlay-title">TRAINING CRAWL</span>
-      <span class="history-overlay-spacer"></span>
-    </div>
-    <div class="crawl-overlay-body" id="crawl-overlay-body">
-      <!-- rendered by JS -->
-    </div>
-  </div>
 
   <!-- History overlay -->
   <div id="history-overlay" class="history-overlay" aria-hidden="true">
@@ -169,8 +144,31 @@
       <span class="history-overlay-title">SESSION HISTORY</span>
       <span class="history-overlay-spacer"></span>
     </div>
-    <div class="history-overlay-body" id="history-overlay-body">
-      <!-- rendered by JS -->
+    <div class="history-overlay-content">
+      <div class="history-overlay-body" id="history-overlay-body">
+        <!-- rendered by JS -->
+      </div>
+      <!-- Per-session detail sidebar -->
+      <div id="history-detail-panel" class="history-detail-panel" aria-hidden="true">
+        <div class="history-detail-header">
+          <span class="history-detail-title" id="history-detail-title">SESSION DETAIL</span>
+          <button type="button" class="history-detail-close" id="history-detail-close" aria-label="Close detail">✕</button>
+        </div>
+        <div class="history-detail-body" id="history-detail-body">
+          <!-- rendered by JS -->
+        </div>
+      </div>
+    </div>
+    <!-- Delete confirmation modal -->
+    <div id="history-delete-modal" class="history-delete-modal" aria-hidden="true">
+      <div class="history-delete-modal-box">
+        <div class="history-delete-modal-title">DELETE SESSION?</div>
+        <div class="history-delete-modal-desc">This will permanently remove all request and score data for this session. This cannot be undone.</div>
+        <div class="history-delete-modal-actions">
+          <button type="button" class="history-modal-cancel-btn" id="history-delete-cancel-btn">CANCEL</button>
+          <button type="button" class="history-modal-confirm-btn" id="history-delete-confirm-btn">YES, DELETE</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -187,6 +185,17 @@
     </div>
     <div class="settings-overlay-body" id="settings-overlay-body">
       <!-- rendered by JS -->
+    </div>
+    <!-- Clear all data confirmation modal -->
+    <div id="settings-clear-modal" class="history-delete-modal" aria-hidden="true">
+      <div class="history-delete-modal-box">
+        <div class="history-delete-modal-title">CLEAR ALL DATA?</div>
+        <div class="history-delete-modal-desc">This will permanently delete all recorded sessions, requests, and scores. The active session will also be reset. This cannot be undone.</div>
+        <div class="history-delete-modal-actions">
+          <button type="button" class="history-modal-cancel-btn" id="settings-clear-cancel-btn">CANCEL</button>
+          <button type="button" class="history-modal-confirm-btn" id="settings-clear-confirm-btn">YES, CLEAR ALL</button>
+        </div>
+      </div>
     </div>
   </div>
 

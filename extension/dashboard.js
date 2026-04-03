@@ -40,7 +40,7 @@ function categoryTooltip(cat) {
 let feedRequests = [];
 let selectedRequestId = null;
 let currentSession = null;
-let settings = { autoscroll_feed: true, min_confidence: 0 };
+let settings = { autoscroll_feed: true, min_confidence: 0, virustotal_enabled: true, use_ml_classifier: true };
 let currentTabId = null;
 let filterState = {
   categories: new Set(),
@@ -60,6 +60,8 @@ let lastGroupCounts = new Map();
 let expandedGroups = new Set();
 // clearFeedOnStart removed — keep_rows flag is now carried in the session_started message
 let frozenElapsedSeconds = 0;
+let historySortKey = 'date';
+let historyDeletePending = null;
 
 /* Phase 9: request detail + VirusTotal */
 let vtLastRequestTime = 0;
@@ -1497,6 +1499,8 @@ function stopSessionTimer() {
     clearInterval(timerInterval);
     timerInterval = null;
   }
+  sessionStartTime = null;
+  updateTimerDisplay();
 }
 
 function updateFeedHeaderDot() {
@@ -2415,6 +2419,13 @@ function buildFilterBar() {
     const v = Math.max(0, Math.min(100, Number(confidenceInput.value) || 0));
     filterState.minConfidence = v;
     confidenceInput.value = String(v);
+    // Sync settings slider if open
+    const settingsSlider = document.getElementById('setting-min-confidence');
+    const settingsSliderVal = document.getElementById('setting-min-confidence-val');
+    if (settingsSlider) { settingsSlider.value = String(v); }
+    if (settingsSliderVal) { settingsSliderVal.textContent = v + '%'; }
+    saveSettingField('min_confidence', v / 100);
+    settings.min_confidence = v / 100;
     updateActiveFilterChips();
     renderFeed(false);
   });
@@ -2713,7 +2724,6 @@ function init() {
   buildFilterBar();
   initHistoryOverlay();
   initSettingsOverlay();
-  initCrawlOverlay();
   pruneOldSessions();
 
   hideSessionConfirmBar();
@@ -2757,10 +2767,6 @@ function init() {
         closeHistoryOverlay();
         const histBtn = document.getElementById('history-nav-btn');
         if (histBtn) histBtn.classList.remove('active');
-      } else if (crawlOverlayOpen()) {
-        closeCrawlOverlay();
-        const crawlBtn = document.getElementById('crawl-nav-btn');
-        if (crawlBtn) crawlBtn.classList.remove('active');
       } else {
         closeDetailPanel();
       }
@@ -3009,6 +3015,8 @@ function closeHistoryOverlay() {
   if (!el) return;
   el.classList.remove('history-overlay--open');
   el.setAttribute('aria-hidden', 'true');
+  const panel = document.getElementById('history-detail-panel');
+  if (panel) { panel.classList.remove('is-open'); panel.setAttribute('aria-hidden', 'true'); }
 }
 
 function formatHistoryDate(ts) {
@@ -3036,7 +3044,7 @@ async function renderHistoryOverlay() {
   if (!body) return;
 
   const result = await chrome.storage.local.get('sessions:history');
-  const sessions = (result['sessions:history'] || []).slice().reverse(); // newest first
+  let sessions = (result['sessions:history'] || []).slice().reverse(); // newest first
 
   if (sessions.length === 0) {
     body.innerHTML = `
@@ -3048,73 +3056,94 @@ async function renderHistoryOverlay() {
     return;
   }
 
-  const rows = sessions.map((s, i) => {
-    const worstScore = s.worst_score ?? 100;
-    const worstClass = worstScore < 40 ? ' history-td-worst--bad' : '';
-    const worstLabel = s.worst_domain
-      ? `${s.worst_domain} (${worstScore})`
-      : `${worstScore}/100`;
-    const trackerCount = s.tracker_count ?? '—';
+  // Apply sort
+  if (historySortKey === 'trackers') {
+    sessions = sessions.slice().sort((a, b) => (b.tracker_count ?? 0) - (a.tracker_count ?? 0));
+  } else if (historySortKey === 'score') {
+    sessions = sessions.slice().sort((a, b) => (a.worst_score ?? 100) - (b.worst_score ?? 100));
+  }
+
+  const cards = sessions.map((s, i) => {
+    const worstScore = s.worst_score ?? null;
+    const trackerCount = s.tracker_count ?? 0;
+    const sitesVisited = s.sites_visited ?? 0;
+    const scoreClass = worstScore === null ? '' :
+      worstScore >= 80 ? ' history-stat-score--good' :
+      worstScore >= 50 ? ' history-stat-score--warn' : ' history-stat-score--bad';
+    const scoreDisplay = worstScore !== null ? worstScore : '—';
+    const domainRow = s.worst_domain
+      ? `<div class="history-card-domain">WORST: <span class="history-card-domain-name${scoreClass}">${s.worst_domain}</span></div>`
+      : '';
+
     return `
-      <tr data-session-idx="${i}" data-session-id="${s.id}">
-        <td class="history-td-date">${formatHistoryDate(s.started_at)}</td>
-        <td class="history-td-duration">${formatHistoryDuration(s.started_at, s.stopped_at)}</td>
-        <td class="history-td-sites td-right">${s.sites_visited ?? '—'}</td>
-        <td class="history-td-trackers td-right">${trackerCount}</td>
-        <td class="history-td-worst${worstClass}" title="${s.worst_domain || ''}">${worstLabel}</td>
-        <td>
-          <div class="history-row-actions">
-            <button type="button" class="history-action-btn history-export-btn" data-idx="${i}" title="Export summary JSON">SUMMARY</button>
-            <button type="button" class="history-action-btn history-full-export-btn" data-idx="${i}" title="Export full session data (requests + scores)">FULL</button>
-            <button type="button" class="history-action-btn history-action-btn--danger history-delete-btn" data-idx="${i}" title="Delete this session">DELETE</button>
+      <div class="history-card" data-session-idx="${i}" data-session-id="${s.id}">
+        <div class="history-card-inner">
+          <div class="history-card-header">
+            <span class="history-card-date">${formatHistoryDate(s.started_at)}</span>
+            <span class="history-card-duration">${formatHistoryDuration(s.started_at, s.stopped_at)}</span>
           </div>
-        </td>
-      </tr>`;
+          <div class="history-card-stats">
+            <div class="history-stat history-stat--primary">
+              <span class="history-stat-num${trackerCount > 0 ? ' history-stat-num--trackers' : ''}">${trackerCount}</span>
+              <span class="history-stat-lbl">TRACKERS</span>
+            </div>
+            <div class="history-stat">
+              <span class="history-stat-num">${sitesVisited}</span>
+              <span class="history-stat-lbl">SITES</span>
+            </div>
+            <div class="history-stat">
+              <span class="history-stat-num${scoreClass}">${scoreDisplay}</span>
+              <span class="history-stat-lbl">PRIVACY SCORE</span>
+            </div>
+          </div>
+          ${domainRow}
+          <div class="history-card-actions">
+            <button type="button" class="history-action-btn history-full-export-btn" data-idx="${i}">FULL EXPORT</button>
+            <span class="history-actions-spacer"></span>
+            <button type="button" class="history-action-btn history-action-btn--danger history-delete-btn" data-idx="${i}">DELETE</button>
+          </div>
+        </div>
+      </div>`;
   }).join('');
 
   body.innerHTML = `
-    <table class="history-table">
-      <thead>
-        <tr>
-          <th>DATE / TIME</th>
-          <th>DURATION</th>
-          <th class="th-right">SITES</th>
-          <th class="th-right">TRACKERS</th>
-          <th>WORST DOMAIN</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="history-table-body">
-        ${rows}
-      </tbody>
-    </table>`;
+    <div class="history-toolbar">
+      <span class="history-toolbar-label">SORT BY</span>
+      <select class="history-sort-select" id="history-sort-select">
+        <option value="date"${historySortKey === 'date' ? ' selected' : ''}>DATE</option>
+        <option value="trackers"${historySortKey === 'trackers' ? ' selected' : ''}>TRACKER COUNT</option>
+        <option value="score"${historySortKey === 'score' ? ' selected' : ''}>PRIVACY SCORE</option>
+      </select>
+    </div>
+    <div class="history-grid">${cards}</div>`;
 
-  // Bind summary export buttons
-  body.querySelectorAll('.history-export-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.idx, 10);
-      const session = sessions[idx];
-      if (!session) return;
-      const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `specter-summary-${session.id}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+  document.getElementById('history-sort-select').addEventListener('change', (e) => {
+    historySortKey = e.target.value;
+    renderHistoryOverlay();
+  });
+
+  // Card inner click — open detail sidebar
+  body.querySelectorAll('.history-card-inner').forEach((inner) => {
+    inner.addEventListener('click', async (e) => {
+      if (e.target.closest('button')) return;
+      const card = inner.closest('.history-card');
+      const idx = parseInt(card.dataset.sessionIdx, 10);
+      // Deselect all, select this one
+      body.querySelectorAll('.history-card--selected').forEach((c) => c.classList.remove('history-card--selected'));
+      card.classList.add('history-card--selected');
+      await openHistoryDetailPanel(sessions[idx]);
     });
   });
 
-  // Bind full export buttons (summary + requests + scores)
+  // Full export
   body.querySelectorAll('.history-full-export-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const idx = parseInt(btn.dataset.idx, 10);
       const session = sessions[idx];
       if (!session) return;
-
-      btn.textContent = '…';
+      btn.textContent = 'LOADING…';
       btn.disabled = true;
-
       try {
         const res = await chrome.storage.local.get([
           'requests:' + session.id,
@@ -3133,48 +3162,154 @@ async function renderHistoryOverlay() {
         a.click();
         URL.revokeObjectURL(url);
       } finally {
-        btn.textContent = 'FULL';
+        btn.textContent = 'FULL EXPORT';
         btn.disabled = false;
       }
     });
   });
 
-  // Bind delete buttons (inline confirm pattern)
+  // Delete → show modal
   body.querySelectorAll('.history-delete-btn').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      if (btn.dataset.confirm === 'pending') {
-        // Confirmed — delete
-        const idx = parseInt(btn.dataset.idx, 10);
-        const target = sessions[idx];
-        if (!target) return;
-        const res = await chrome.storage.local.get('sessions:history');
-        const all = res['sessions:history'] || [];
-        const updated = all.filter((s) => s.id !== target.id);
-        await chrome.storage.local.set({ 'sessions:history': updated });
-        // Also remove associated request/score data to free space
-        await chrome.storage.local.remove([
-          'requests:' + target.id,
-          'scores:' + target.id,
-        ]);
-        renderHistoryOverlay();
-      } else {
-        // First click — show confirm state
-        btn.textContent = 'CONFIRM?';
-        btn.dataset.confirm = 'pending';
-        btn.classList.add('history-action-btn--confirm');
-        btn.classList.remove('history-action-btn--danger');
-        // Auto-revert after 3s
-        setTimeout(() => {
-          if (btn.dataset.confirm === 'pending') {
-            btn.textContent = 'DELETE';
-            btn.dataset.confirm = '';
-            btn.classList.remove('history-action-btn--confirm');
-            btn.classList.add('history-action-btn--danger');
-          }
-        }, 3000);
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx, 10);
+      historyDeletePending = sessions[idx];
+      const modal = document.getElementById('history-delete-modal');
+      if (modal) {
+        modal.classList.add('is-open');
+        modal.setAttribute('aria-hidden', 'false');
       }
     });
   });
+}
+
+async function openHistoryDetailPanel(session) {
+  const panel = document.getElementById('history-detail-panel');
+  const titleEl = document.getElementById('history-detail-title');
+  const bodyEl = document.getElementById('history-detail-body');
+  if (!panel || !bodyEl) return;
+
+  // Open panel
+  panel.classList.add('is-open');
+  panel.setAttribute('aria-hidden', 'false');
+  if (titleEl) titleEl.textContent = formatHistoryDate(session.started_at);
+
+  // Show loading state
+  bodyEl.innerHTML = `<div class="history-detail-loading">Loading…</div>`;
+
+  const res = await chrome.storage.local.get('scores:' + session.id);
+  const scores = res['scores:' + session.id] || {};
+  const siteEntries = Object.entries(scores).sort(
+    (a, b) => (a[1].privacy_score ?? 100) - (b[1].privacy_score ?? 100)
+  );
+
+  // Summary stats block
+  const worstScore = session.worst_score ?? null;
+  const scoreClass = worstScore === null ? '' :
+    worstScore >= 80 ? ' history-stat-score--good' :
+    worstScore >= 50 ? ' history-stat-score--warn' : ' history-stat-score--bad';
+
+  const summaryHtml = `
+    <div class="history-detail-stats">
+      <div class="history-stat history-stat--primary">
+        <span class="history-stat-num${session.tracker_count > 0 ? ' history-stat-num--trackers' : ''}">${session.tracker_count ?? 0}</span>
+        <span class="history-stat-lbl">TRACKERS</span>
+      </div>
+      <div class="history-stat">
+        <span class="history-stat-num">${session.sites_visited ?? 0}</span>
+        <span class="history-stat-lbl">SITES</span>
+      </div>
+      <div class="history-stat">
+        <span class="history-stat-num${scoreClass}">${worstScore ?? '—'}</span>
+        <span class="history-stat-lbl">SCORE</span>
+      </div>
+    </div>`;
+
+  if (siteEntries.length === 0) {
+    bodyEl.innerHTML = summaryHtml + `<div class="history-detail-loading">No site data recorded.</div>`;
+    return;
+  }
+
+  const rows = siteEntries.map(([domain, data]) => {
+    const score = data.privacy_score ?? '—';
+    const trackers = data.tracker_requests ?? 0;
+    const cats = [];
+    if ((data.unique_behavioral?.length || 0) > 0) cats.push('behavioral');
+    if ((data.unique_fingerprinting?.length || 0) > 0 || data.has_fingerprinting) cats.push('fingerprinting');
+    if (data.has_session_replay) cats.push('session replay');
+    if ((data.unique_ad_network?.length || 0) > 0) cats.push('ads');
+    if ((data.unique_analytics?.length || 0) > 0) cats.push('analytics');
+    const catStr = cats.join(', ') || '—';
+    const scoreClass = typeof score === 'number'
+      ? score >= 80 ? ' score-good' : score >= 50 ? ' score-warn' : ' score-bad'
+      : '';
+    return `
+      <tr>
+        <td><span class="history-site-domain" title="${domain}">${domain}</span></td>
+        <td class="td-r">${trackers}</td>
+        <td><span class="history-site-cats">${catStr}</span></td>
+        <td class="td-r"><span class="history-site-score${scoreClass}">${score}</span></td>
+      </tr>`;
+  }).join('');
+
+  bodyEl.innerHTML = `
+    ${summaryHtml}
+    <div>
+      <div class="history-detail-section-title">PER-SITE BREAKDOWN</div>
+      <table class="history-sites-table">
+        <thead>
+          <tr>
+            <th>DOMAIN</th>
+            <th class="th-r">TRACK.</th>
+            <th>CATEGORIES</th>
+            <th class="th-r">SCORE</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <button type="button" class="history-copy-btn" id="history-panel-copy-btn">COPY REPORT</button>`;
+
+  bodyEl.querySelector('#history-panel-copy-btn').addEventListener('click', async (btn_e) => {
+    const btn = btn_e.currentTarget;
+    const text = buildCopyReport(session, scores);
+    await navigator.clipboard.writeText(text);
+    btn.textContent = 'COPIED!';
+    setTimeout(() => { btn.textContent = 'COPY REPORT'; }, 2000);
+  });
+}
+
+function buildCopyReport(session, scores) {
+  const date = formatHistoryDate(session.started_at);
+  const duration = formatHistoryDuration(session.started_at, session.stopped_at);
+  const sites = session.sites_visited ?? 0;
+  const trackers = session.tracker_count ?? 0;
+  const worst = session.worst_domain ?? '—';
+  const worstScore = session.worst_score ?? '—';
+
+  const siteEntries = Object.entries(scores).sort(
+    (a, b) => (a[1].privacy_score ?? 100) - (b[1].privacy_score ?? 100)
+  );
+
+  let text = `SPECTER SESSION REPORT\n${'='.repeat(40)}\n`;
+  text += `Date:     ${date}\n`;
+  text += `Duration: ${duration}\n`;
+  text += `Sites:    ${sites}\n`;
+  text += `Trackers: ${trackers}\n`;
+  text += `Worst:    ${worst} (score: ${worstScore})\n\n`;
+  text += `PER-SITE BREAKDOWN\n${'-'.repeat(40)}\n`;
+  for (const [domain, data] of siteEntries) {
+    const score = data.privacy_score ?? '—';
+    const t = data.tracker_requests ?? 0;
+    const cats = [];
+    if ((data.unique_behavioral?.length || 0) > 0) cats.push('behavioral');
+    if ((data.unique_fingerprinting?.length || 0) > 0 || data.has_fingerprinting) cats.push('fingerprinting');
+    if (data.has_session_replay) cats.push('session replay');
+    if ((data.unique_ad_network?.length || 0) > 0) cats.push('ads');
+    if ((data.unique_analytics?.length || 0) > 0) cats.push('analytics');
+    text += `${domain}\n  Score: ${score}  Trackers: ${t}  Categories: ${cats.join(', ') || 'none'}\n`;
+  }
+  return text;
 }
 
 // ─── Settings overlay ──────────────────────────────────────────────────────
@@ -3225,8 +3360,21 @@ async function renderSettingsOverlay() {
   const body = document.getElementById('settings-overlay-body');
   if (!body) return;
 
-  const { settings: stored } = await chrome.storage.local.get('settings');
-  const s = { autoscroll_feed: true, data_retention_days: 30, virustotal_api_key: '', ...(stored || {}) };
+  const [{ settings: stored }, { 'model:loaded_at': modelLoadedAt }] =
+    await Promise.all([
+      chrome.storage.local.get('settings'),
+      chrome.storage.local.get('model:loaded_at'),
+    ]);
+
+  const s = {
+    autoscroll_feed: true,
+    data_retention_days: 30,
+    virustotal_api_key: '',
+    virustotal_enabled: true,
+    min_confidence: 0,
+    use_ml_classifier: true,
+    ...(stored || {}),
+  };
 
   const retentionOptions = [
     { value: 7,  label: '7 days'  },
@@ -3239,9 +3387,13 @@ async function renderSettingsOverlay() {
     .map((o) => `<option value="${o.value}"${Number(s.data_retention_days) === o.value ? ' selected' : ''}>${o.label}</option>`)
     .join('');
 
+  const modelStatus = modelLoadedAt
+    ? `ML (XGBoost) · loaded ${formatHistoryDate(modelLoadedAt)}`
+    : 'ML (XGBoost) · not yet loaded';
+
   body.innerHTML = `
     <div class="settings-section">
-      <div class="settings-section-title">FEED</div>
+      <div class="settings-section-header"><span class="settings-section-title">FEED</span></div>
 
       <div class="settings-row">
         <div class="settings-row-label">
@@ -3256,6 +3408,18 @@ async function renderSettingsOverlay() {
 
       <div class="settings-row">
         <div class="settings-row-label">
+          <div class="settings-row-title">Minimum confidence</div>
+          <div class="settings-row-hint">Hide requests classified below this confidence level</div>
+        </div>
+        <div class="settings-slider-wrap">
+          <input type="range" id="setting-min-confidence" class="settings-slider"
+            min="0" max="95" step="5" value="${Math.round((s.min_confidence ?? 0) * 100)}">
+          <span class="settings-slider-value" id="setting-min-confidence-val">${Math.round((s.min_confidence ?? 0) * 100)}%</span>
+        </div>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-row-label">
           <div class="settings-row-title">Data retention</div>
           <div class="settings-row-hint">Automatically delete sessions older than this</div>
         </div>
@@ -3266,12 +3430,23 @@ async function renderSettingsOverlay() {
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-title">INTEGRATIONS</div>
+      <div class="settings-section-header"><span class="settings-section-title">INTEGRATIONS</span></div>
 
       <div class="settings-row">
         <div class="settings-row-label">
+          <div class="settings-row-title">VirusTotal lookups</div>
+          <div class="settings-row-hint">Check domain reputation in request detail panel</div>
+        </div>
+        <label class="settings-toggle" aria-label="Enable VirusTotal lookups">
+          <input type="checkbox" id="setting-vt-enabled"${s.virustotal_enabled ? ' checked' : ''}>
+          <span class="settings-toggle-track"></span>
+        </label>
+      </div>
+
+      <div class="settings-row settings-row--nested" id="setting-vt-key-row">
+        <div class="settings-row-label">
           <div class="settings-row-title">VirusTotal API key</div>
-          <div class="settings-row-hint">Used to look up domain reputation in request detail</div>
+          <div class="settings-row-hint">Free tier: 4 requests/min · 500 requests/day</div>
         </div>
         <div class="settings-vt-wrap">
           <div class="settings-vt-input-row">
@@ -3284,20 +3459,46 @@ async function renderSettingsOverlay() {
               placeholder="Paste API key…"
               autocomplete="off"
               spellcheck="false"
+              ${!s.virustotal_enabled ? 'disabled' : ''}
             >
-            <button type="button" class="settings-test-btn" id="settings-vt-test">TEST</button>
+            <button type="button" class="settings-test-btn" id="settings-vt-test" ${!s.virustotal_enabled ? 'disabled' : ''}>TEST</button>
           </div>
           <span class="settings-vt-status" id="settings-vt-status"></span>
         </div>
       </div>
     </div>
 
-    <div class="settings-danger-zone">
-      <div class="settings-danger-label">
-        <div class="settings-danger-label-title">Clear all session data</div>
-        <div class="settings-danger-label-hint">Permanently deletes all recorded sessions, requests, and scores</div>
+    <div class="settings-section">
+      <div class="settings-section-header"><span class="settings-section-title">CLASSIFIER</span></div>
+
+      <div class="settings-row">
+        <div class="settings-row-label">
+          <div class="settings-row-title">Use ML classifier</div>
+          <div class="settings-row-hint">XGBoost model for request classification. Disable to use rule-based only.</div>
+        </div>
+        <label class="settings-toggle" aria-label="Use ML classifier">
+          <input type="checkbox" id="setting-use-ml"${s.use_ml_classifier ? ' checked' : ''}>
+          <span class="settings-toggle-track"></span>
+        </label>
       </div>
-      <button type="button" class="settings-danger-btn" id="settings-clear-data">CLEAR ALL DATA</button>
+
+      <div class="settings-row settings-row--info">
+        <div class="settings-row-label">
+          <div class="settings-row-title">Active classifier</div>
+          <div class="settings-row-hint" id="setting-classifier-info">${s.use_ml_classifier ? modelStatus : 'Rule-based (weighted multi-signal scorer)'}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-danger-zone">
+      <div class="settings-section-header"><span class="settings-section-title settings-section-title--danger">DANGER ZONE</span></div>
+      <div class="settings-danger-row">
+        <div class="settings-danger-label">
+          <div class="settings-danger-label-title">Clear all session data</div>
+          <div class="settings-danger-label-hint">Permanently deletes all recorded sessions, requests, and scores</div>
+        </div>
+        <button type="button" class="settings-danger-btn" id="settings-clear-data">CLEAR ALL DATA</button>
+      </div>
     </div>`;
 
   // Autoscroll toggle
@@ -3306,9 +3507,36 @@ async function renderSettingsOverlay() {
     settings.autoscroll_feed = e.target.checked;
   });
 
+  // Min confidence slider
+  const confSlider = document.getElementById('setting-min-confidence');
+  const confVal = document.getElementById('setting-min-confidence-val');
+  confSlider.addEventListener('input', () => {
+    confVal.textContent = confSlider.value + '%';
+  });
+  confSlider.addEventListener('change', () => {
+    const pct = Number(confSlider.value);
+    saveSettingField('min_confidence', pct / 100);
+    settings.min_confidence = pct / 100;
+    // Sync feed filter
+    filterState.minConfidence = pct;
+    const feedInput = document.getElementById('feed-min-confidence');
+    if (feedInput) feedInput.value = String(pct);
+    renderFeed(false);
+  });
+
   // Retention select
   document.getElementById('setting-retention').addEventListener('change', (e) => {
     saveSettingField('data_retention_days', Number(e.target.value));
+  });
+
+  // VT enable toggle
+  const vtEnabledToggle = document.getElementById('setting-vt-enabled');
+  vtEnabledToggle.addEventListener('change', (e) => {
+    saveSettingField('virustotal_enabled', e.target.checked);
+    const vtKey = document.getElementById('setting-vt-key');
+    const vtTest = document.getElementById('settings-vt-test');
+    if (vtKey) vtKey.disabled = !e.target.checked;
+    if (vtTest) vtTest.disabled = !e.target.checked;
   });
 
   // VT key — clear placeholder on first focus so user can type a real key
@@ -3346,7 +3574,7 @@ async function renderSettingsOverlay() {
         headers: { 'x-apikey': key },
       });
       if (resp.ok) {
-        vtStatus.textContent = 'Valid ✓';
+        vtStatus.textContent = 'Valid — 4 req/min, 500 req/day (Free tier)';
         vtStatus.className = 'settings-vt-status settings-vt-status--ok';
         await saveSettingField('virustotal_api_key', key);
       } else if (resp.status === 401 || resp.status === 403) {
@@ -3361,53 +3589,24 @@ async function renderSettingsOverlay() {
       vtStatus.className = 'settings-vt-status settings-vt-status--error';
     } finally {
       testBtn.textContent = 'TEST';
-      testBtn.disabled = false;
+      testBtn.disabled = !s.virustotal_enabled;
     }
   });
 
-  // Clear all data
-  const clearBtn = document.getElementById('settings-clear-data');
-  clearBtn.addEventListener('click', async () => {
-    if (clearBtn.dataset.confirm === 'pending') {
-      clearBtn.disabled = true;
-      try {
-        const all = await chrome.storage.local.get(null);
-        const keysToRemove = Object.keys(all).filter(
-          (k) => k.startsWith('requests:') || k.startsWith('scores:') || k === 'sessions:history'
-        );
-        if (keysToRemove.length > 0) await chrome.storage.local.remove(keysToRemove);
-        // Reset active session state
-        await chrome.storage.local.set({
-          'session:current': null,
-          'session:paused': false,
-          'session:elapsed_frozen': 0,
-        });
-        clearBtn.textContent = 'CLEARED ✓';
-        clearBtn.className = 'settings-danger-btn settings-danger-btn--success';
-        clearBtn.dataset.confirm = '';
-        setTimeout(() => {
-          clearBtn.textContent = 'CLEAR ALL DATA';
-          clearBtn.className = 'settings-danger-btn';
-          clearBtn.disabled = false;
-        }, 2500);
-      } catch {
-        clearBtn.textContent = 'CLEAR ALL DATA';
-        clearBtn.className = 'settings-danger-btn';
-        clearBtn.dataset.confirm = '';
-        clearBtn.disabled = false;
-      }
-    } else {
-      clearBtn.textContent = 'CONFIRM — CANNOT UNDO';
-      clearBtn.dataset.confirm = 'pending';
-      clearBtn.className = 'settings-danger-btn settings-danger-btn--confirm';
-      setTimeout(() => {
-        if (clearBtn.dataset.confirm === 'pending') {
-          clearBtn.textContent = 'CLEAR ALL DATA';
-          clearBtn.dataset.confirm = '';
-          clearBtn.className = 'settings-danger-btn';
-        }
-      }, 3500);
+  // ML classifier toggle
+  const mlToggle = document.getElementById('setting-use-ml');
+  mlToggle.addEventListener('change', async (e) => {
+    await saveSettingField('use_ml_classifier', e.target.checked);
+    const infoEl = document.getElementById('setting-classifier-info');
+    if (infoEl) {
+      infoEl.textContent = e.target.checked ? modelStatus : 'Rule-based (weighted multi-signal scorer)';
     }
+  });
+
+  // Clear all data → show modal
+  document.getElementById('settings-clear-data').addEventListener('click', () => {
+    const modal = document.getElementById('settings-clear-modal');
+    if (modal) { modal.classList.add('is-open'); modal.setAttribute('aria-hidden', 'false'); }
   });
 }
 
@@ -3437,6 +3636,48 @@ function initSettingsOverlay() {
       if (navBtn) navBtn.classList.remove('active');
     });
   }
+
+  // Clear all data modal
+  const clearCancelBtn = document.getElementById('settings-clear-cancel-btn');
+  const clearConfirmBtn = document.getElementById('settings-clear-confirm-btn');
+  const clearModal = document.getElementById('settings-clear-modal');
+  if (clearCancelBtn) {
+    clearCancelBtn.addEventListener('click', () => {
+      if (clearModal) { clearModal.classList.remove('is-open'); clearModal.setAttribute('aria-hidden', 'true'); }
+    });
+  }
+  if (clearConfirmBtn) {
+    clearConfirmBtn.addEventListener('click', async () => {
+      clearConfirmBtn.textContent = 'CLEARING…';
+      clearConfirmBtn.disabled = true;
+      try {
+        const all = await chrome.storage.local.get(null);
+        const keysToRemove = Object.keys(all).filter(
+          (k) => k.startsWith('requests:') || k.startsWith('scores:') || k === 'sessions:history'
+        );
+        if (keysToRemove.length > 0) await chrome.storage.local.remove(keysToRemove);
+        await chrome.storage.local.set({
+          'session:current': null,
+          'session:paused': false,
+          'session:elapsed_frozen': 0,
+        });
+      } finally {
+        clearConfirmBtn.textContent = 'YES, CLEAR ALL';
+        clearConfirmBtn.disabled = false;
+        if (clearModal) { clearModal.classList.remove('is-open'); clearModal.setAttribute('aria-hidden', 'true'); }
+        // Re-render settings to reflect cleared state
+        renderSettingsOverlay();
+      }
+    });
+  }
+  if (clearModal) {
+    clearModal.addEventListener('click', (e) => {
+      if (e.target === clearModal) {
+        clearModal.classList.remove('is-open');
+        clearModal.setAttribute('aria-hidden', 'true');
+      }
+    });
+  }
 }
 
 function initHistoryOverlay() {
@@ -3459,338 +3700,61 @@ function initHistoryOverlay() {
       if (navBtn) navBtn.classList.remove('active');
     });
   }
-}
 
-// ── Training Crawl ────────────────────────────────────────────────────────────
-
-let CRAWL_SITES = [];
-
-async function loadCrawlSites() {
-  if (CRAWL_SITES.length > 0) return;
-  try {
-    const res  = await fetch(chrome.runtime.getURL('data/sites.txt'));
-    const text = await res.text();
-    CRAWL_SITES = text.split('\n')
-      .map(l => l.trim())
-      .filter(l => l && !l.startsWith('#'));
-  } catch (e) {
-    console.warn('[Specter] Failed to load sites.txt:', e);
-  }
-}
-
-const CRAWL_DWELL_MS = 6000;
-let crawlRunning      = false;
-let crawlStartedAt    = 0;
-let crawlReqCount     = 0;
-let crawlTrackerCount = 0;
-let crawlVisited      = []; // URLs visited so far, most recent first
-/** Sites in the current/last crawl (custom or default); synced from start + service worker messages */
-let crawlUrlCount = 0;
-let crawlProgressIndex = 0;
-let crawlCurrentUrl = '';
-
-function fmtDuration(ms) {
-  if (ms <= 0) return '—';
-  const s = Math.round(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0)  return `${h}h ${m % 60}m`;
-  if (m > 0)  return `${m}m ${s % 60}s`;
-  return `${s}s`;
-}
-
-function crawlOverlayOpen() {
-  const el = document.getElementById('crawl-overlay');
-  return el ? el.classList.contains('crawl-overlay--open') : false;
-}
-function openCrawlOverlay() {
-  const el = document.getElementById('crawl-overlay');
-  if (el) { el.classList.add('crawl-overlay--open'); el.removeAttribute('aria-hidden'); }
-  renderCrawlPanel({
-    running: crawlRunning,
-    index: crawlProgressIndex,
-    total: crawlUrlCount || CRAWL_SITES.length,
-    url: crawlCurrentUrl,
-  });
-}
-function closeCrawlOverlay() {
-  const el = document.getElementById('crawl-overlay');
-  if (el) { el.classList.remove('crawl-overlay--open'); el.setAttribute('aria-hidden', 'true'); }
-}
-
-function renderCrawlPanel({ running, index, total, url, done, doneTotal }) {
-  const body = document.getElementById('crawl-overlay-body');
-  if (!body) return;
-
-  const pct = total > 0 ? Math.round((index / total) * 100) : 0;
-
-  if (done) {
-    const totalTime = crawlStartedAt ? fmtDuration(Date.now() - crawlStartedAt) : '—';
-    const trackerRate = crawlReqCount > 0 ? ((crawlTrackerCount / crawlReqCount) * 100).toFixed(1) : '0.0';
-    body.innerHTML = `
-      <p class="crawl-done-msg">✓ Crawl complete — ${doneTotal} sites visited in ${totalTime}.</p>
-      <div class="crawl-stats-row">
-        <div class="crawl-stat">
-          <div class="crawl-stat-value">${crawlReqCount.toLocaleString()}</div>
-          <div class="crawl-stat-label">REQUESTS</div>
-        </div>
-        <div class="crawl-stat">
-          <div class="crawl-stat-value crawl-stat-value--accent">${crawlTrackerCount.toLocaleString()}</div>
-          <div class="crawl-stat-label">TRACKERS</div>
-        </div>
-        <div class="crawl-stat">
-          <div class="crawl-stat-value">${trackerRate}%</div>
-          <div class="crawl-stat-label">TRACKER RATE</div>
-        </div>
-      </div>
-      <p class="crawl-info">Stop your Specter session and use the FULL EXPORT button in Session History to save the training data.</p>
-      ${crawlVisited.length > 0 ? `
-      <div class="crawl-visited-wrap">
-        <div class="crawl-visited-label">SITES VISITED <span class="crawl-visited-count">${crawlVisited.length}</span></div>
-        <div class="crawl-visited-list">
-          ${crawlVisited.map(u => `<div class="crawl-visited-item">${u}</div>`).join('')}
-        </div>
-      </div>` : ''}
-      <button class="crawl-start-btn" id="crawl-start-btn">START NEW CRAWL</button>`;
-    body.querySelector('#crawl-start-btn').addEventListener('click', () => startCrawl());
-    return;
-  }
-
-  if (running) {
-    const now = Date.now();
-    const elapsed = crawlStartedAt ? fmtDuration(now - crawlStartedAt) : '—';
-    const etaMs = crawlStartedAt && index > 0
-      ? ((now - crawlStartedAt) / index) * (total - index)
-      : null;
-    const eta = etaMs != null ? '~' + fmtDuration(etaMs) : '—';
-
-    body.innerHTML = `
-      <div class="crawl-progress-wrap">
-        <div class="crawl-progress-label">
-          <span>PROGRESS</span>
-          <span>${index} / ${total} <span class="crawl-pct">${pct}%</span></span>
-        </div>
-        <div class="crawl-progress-track"><div class="crawl-progress-fill" style="width:${pct}%"></div></div>
-      </div>
-      <div class="crawl-current-url" id="crawl-current-url">${url || '—'}</div>
-      <div class="crawl-stats-row">
-        <div class="crawl-stat">
-          <div class="crawl-stat-value" id="crawl-stat-elapsed">${elapsed}</div>
-          <div class="crawl-stat-label">ELAPSED</div>
-        </div>
-        <div class="crawl-stat">
-          <div class="crawl-stat-value" id="crawl-stat-eta">${eta}</div>
-          <div class="crawl-stat-label">ETA</div>
-        </div>
-        <div class="crawl-stat">
-          <div class="crawl-stat-value" id="crawl-stat-requests">${crawlReqCount.toLocaleString()}</div>
-          <div class="crawl-stat-label">REQUESTS</div>
-        </div>
-        <div class="crawl-stat">
-          <div class="crawl-stat-value crawl-stat-value--accent" id="crawl-stat-trackers">${crawlTrackerCount.toLocaleString()}</div>
-          <div class="crawl-stat-label">TRACKERS</div>
-        </div>
-      </div>
-      <button class="crawl-stop-btn" id="crawl-stop-btn">■ STOP CRAWL</button>
-      ${crawlVisited.length > 0 ? `
-      <div class="crawl-visited-wrap">
-        <div class="crawl-visited-label">VISITED <span class="crawl-visited-count">${crawlVisited.length}</span></div>
-        <div class="crawl-visited-list" id="crawl-visited-list">
-          ${crawlVisited.map(u => `<div class="crawl-visited-item">${u}</div>`).join('')}
-        </div>
-      </div>` : ''}`;
-    body.querySelector('#crawl-stop-btn').addEventListener('click', () => stopCrawl());
-    return;
-  }
-
-  // idle state — check if session is active
-  chrome.storage.local.get('session:current').then((r) => {
-    const sessionActive = r['session:current']?.active;
-    body.innerHTML = `
-      ${!sessionActive ? `<p class="crawl-warning">⚠ No active session — start a Specter session before crawling so requests are recorded.</p>` : ''}
-      <p class="crawl-info">A background tab is opened and navigated automatically — webRequest captures all traffic normally.</p>
-      <div class="crawl-sites-wrap">
-        <div class="crawl-sites-header">
-          <span class="crawl-sites-label">SITES TO VISIT</span>
-          <span class="crawl-sites-hint" id="crawl-sites-hint">default list · ${CRAWL_SITES.length} sites</span>
-        </div>
-        <textarea class="crawl-textarea" id="crawl-sites-input"
-          placeholder="Leave blank to use the default list (${CRAWL_SITES.length} sites)&#10;&#10;Or enter URLs to crawl, one per line:&#10;https://example.com&#10;https://another-site.com"></textarea>
-      </div>
-      <button class="crawl-start-btn" id="crawl-start-btn">▶ START CRAWL</button>`;
-    const ta   = body.querySelector('#crawl-sites-input');
-    const hint = body.querySelector('#crawl-sites-hint');
-    ta.addEventListener('input', () => {
-      const urls = ta.value.trim().split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-      if (ta.value.trim()) {
-        hint.textContent = `custom · ${urls.length} site${urls.length !== 1 ? 's' : ''}`;
-        hint.className = 'crawl-sites-hint crawl-sites-hint--custom';
-      } else {
-        hint.textContent = `default list · ${CRAWL_SITES.length} sites`;
-        hint.className = 'crawl-sites-hint';
-      }
-    });
-    body.querySelector('#crawl-start-btn').addEventListener('click', () => startCrawl());
-  });
-}
-
-function normalizeCrawlUrl(u) {
-  return /^https?:\/\//i.test(u) ? u : 'https://' + u;
-}
-function startCrawl() {
-  const ta = document.getElementById('crawl-sites-input');
-  const customText = ta ? ta.value.trim() : '';
-  const urls = customText
-    ? customText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(normalizeCrawlUrl)
-    : CRAWL_SITES;
-  if (urls.length === 0) return;
-  crawlRunning      = true;
-  crawlStartedAt    = Date.now();
-  crawlReqCount     = 0;
-  crawlTrackerCount = 0;
-  crawlVisited      = [];
-  crawlUrlCount     = urls.length;
-  crawlProgressIndex = 0;
-  crawlCurrentUrl   = '';
-  renderCrawlPanel({ running: true, index: 0, total: urls.length, url: '' });
-  chrome.runtime.sendMessage({ type: 'start_crawl', urls, dwell_ms: CRAWL_DWELL_MS });
-}
-
-function stopCrawl() {
-  crawlRunning = false;
-  chrome.runtime.sendMessage({ type: 'stop_crawl' });
-  crawlProgressIndex = 0;
-  crawlCurrentUrl = '';
-  renderCrawlPanel({
-    running: false,
-    index: 0,
-    total: crawlUrlCount || CRAWL_SITES.length,
-    url: '',
-  });
-}
-
-/**
- * After dashboard reload, in-memory crawl flags are lost but the service worker
- * keeps `crawl:state` in session storage while a crawl runs. Restore flags so
- * `request_update` can keep incrementing crawl stat counters.
- */
-async function restoreCrawlStateFromSession() {
-  try {
-    const r = await chrome.storage.session.get('crawl:state');
-    const state = r['crawl:state'];
-    if (!state || !state.active || !Array.isArray(state.urls) || state.urls.length === 0) return;
-
-    crawlRunning = true;
-    crawlUrlCount = state.urls.length;
-    crawlStartedAt =
-      typeof state.startedAt === 'number' && Number.isFinite(state.startedAt) ? state.startedAt : Date.now();
-    if (typeof state.index === 'number' && Number.isFinite(state.index) && state.index >= 0) {
-      crawlProgressIndex = state.index;
-    }
-    const n = Math.min(state.index, state.urls.length);
-    const chronological = state.urls.slice(0, n);
-    crawlVisited = chronological.slice().reverse();
-    const lastI = n - 1;
-    crawlCurrentUrl = lastI >= 0 ? normalizeCrawlUrl(state.urls[lastI]) : '';
-  } catch (e) {
-    console.warn('[Specter] restoreCrawlStateFromSession:', e);
-  }
-}
-
-async function initCrawlOverlay() {
-  await loadCrawlSites();
-  await restoreCrawlStateFromSession();
-  const navBtn  = document.getElementById('crawl-nav-btn');
-  const backBtn = document.getElementById('crawl-back-btn');
-
-  if (navBtn) {
-    navBtn.addEventListener('click', () => {
-      if (crawlOverlayOpen()) {
-        closeCrawlOverlay();
-        navBtn.classList.remove('active');
-      } else {
-        openCrawlOverlay();
-        navBtn.classList.add('active');
-      }
-    });
-  }
-  if (backBtn) {
-    backBtn.addEventListener('click', () => {
-      closeCrawlOverlay();
-      if (navBtn) navBtn.classList.remove('active');
+  // Detail panel close button
+  const detailCloseBtn = document.getElementById('history-detail-close');
+  if (detailCloseBtn) {
+    detailCloseBtn.addEventListener('click', () => {
+      const panel = document.getElementById('history-detail-panel');
+      if (panel) { panel.classList.remove('is-open'); panel.setAttribute('aria-hidden', 'true'); }
+      const body = document.getElementById('history-overlay-body');
+      if (body) body.querySelectorAll('.history-card--selected').forEach((c) => c.classList.remove('history-card--selected'));
     });
   }
 
-  // Listen for crawl broadcast messages from SW
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === 'crawl_started') {
-      crawlRunning = true;
-      if (typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0) {
-        crawlUrlCount = message.total;
+  // Delete modal buttons
+  const cancelBtn = document.getElementById('history-delete-cancel-btn');
+  const confirmBtn = document.getElementById('history-delete-confirm-btn');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      const modal = document.getElementById('history-delete-modal');
+      if (modal) { modal.classList.remove('is-open'); modal.setAttribute('aria-hidden', 'true'); }
+      historyDeletePending = null;
+    });
+  }
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', async () => {
+      const target = historyDeletePending;
+      if (!target) return;
+      confirmBtn.textContent = 'DELETING…';
+      confirmBtn.disabled = true;
+      try {
+        const res = await chrome.storage.local.get('sessions:history');
+        const all = res['sessions:history'] || [];
+        const updated = all.filter((s) => s.id !== target.id);
+        await chrome.storage.local.set({ 'sessions:history': updated });
+        await chrome.storage.local.remove(['requests:' + target.id, 'scores:' + target.id]);
+      } finally {
+        confirmBtn.textContent = 'YES, DELETE';
+        confirmBtn.disabled = false;
+        const modal = document.getElementById('history-delete-modal');
+        if (modal) { modal.classList.remove('is-open'); modal.setAttribute('aria-hidden', 'true'); }
+        historyDeletePending = null;
+        renderHistoryOverlay();
       }
-      if (!crawlStartedAt) crawlStartedAt = Date.now();
-    }
-    if (message.type === 'crawl_progress') {
-      if (message.startedAt) crawlStartedAt = message.startedAt;
-      if (typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0) {
-        crawlUrlCount = message.total;
+    });
+  }
+  // Clicking modal backdrop dismisses
+  const modal = document.getElementById('history-delete-modal');
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.classList.remove('is-open');
+        modal.setAttribute('aria-hidden', 'true');
+        historyDeletePending = null;
       }
-      if (typeof message.index === 'number' && Number.isFinite(message.index) && message.index >= 0) {
-        crawlProgressIndex = message.index;
-      }
-      if (typeof message.url === 'string' && message.url) {
-        crawlVisited.unshift(message.url);
-        crawlCurrentUrl = message.url;
-      }
-      if (crawlOverlayOpen()) {
-        const totalUi = Math.max(1, crawlUrlCount || CRAWL_SITES.length || 1);
-        renderCrawlPanel({
-          running: true,
-          index: crawlProgressIndex,
-          total: totalUi,
-          url: crawlCurrentUrl,
-        });
-      }
-    }
-    if (message.type === 'crawl_done') {
-      crawlRunning = false;
-      if (typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0) {
-        crawlUrlCount = message.total;
-      }
-      if (crawlOverlayOpen()) {
-        const doneTotal =
-          typeof message.total === 'number' && Number.isFinite(message.total) && message.total >= 0
-            ? message.total
-            : crawlUrlCount;
-        renderCrawlPanel({ done: true, doneTotal: Math.max(0, doneTotal || 0) });
-      }
-    }
-    if (message.type === 'crawl_stopped') {
-      crawlRunning = false;
-      crawlProgressIndex = 0;
-      crawlCurrentUrl = '';
-      if (crawlOverlayOpen()) {
-        renderCrawlPanel({
-          running: false,
-          index: 0,
-          total: crawlUrlCount || CRAWL_SITES.length,
-          url: '',
-        });
-      }
-    }
-    // Count requests + trackers live — update in-place so no full re-render per request
-    if (message.type === 'request_update' && crawlRunning) {
-      crawlReqCount++;
-      const cat = message.request?.category;
-      if (cat && cat !== 'legitimate' && cat !== 'unclassified') crawlTrackerCount++;
-      const reqEl = document.getElementById('crawl-stat-requests');
-      const trkEl = document.getElementById('crawl-stat-trackers');
-      const elEl  = document.getElementById('crawl-stat-elapsed');
-      if (reqEl) reqEl.textContent = crawlReqCount.toLocaleString();
-      if (trkEl) trkEl.textContent = crawlTrackerCount.toLocaleString();
-      if (elEl && crawlStartedAt) elEl.textContent = fmtDuration(Date.now() - crawlStartedAt);
-    }
-  });
+    });
+  }
 }
 
 if (document.readyState === 'loading') {

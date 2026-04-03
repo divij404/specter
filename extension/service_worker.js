@@ -345,19 +345,145 @@ function classifyRuleBased(features) {
   return { category: winnerCat, confidence: +confidence.toFixed(3), feature_importances: importances };
 }
 
+// ── ML model inference (XGBoost → pure-JS tree traversal) ───────────────────
+//
+// Loads model.json once, caches it, then runs inference entirely in JS with
+// no WASM or offscreen document. Falls back to rule-based if the model isn't
+// loaded yet or errors. session_replay is always handled by rule-based because
+// it was excluded from training (too few examples).
+
+const MODEL_FEATURE_COLS = [
+  'has_cors_header','has_encoded_params','has_no_cache','has_origin_header',
+  'has_referer_header','has_set_cookie','has_tracking_params',
+  'is_font_or_style','is_same_domain','is_small_image','is_third_party',
+  'is_tiny_response','domain_is_cdn','domain_matches_analytics',
+  'domain_matches_session_replay','path_is_tracker','path_matches_ad',
+  'path_matches_analytics','path_matches_fingerprint','path_matches_session_replay',
+  'in_blocklist','loads_as_script','subdomain_is_tracker',
+  'path_depth','query_param_count','tracking_param_count','url_length',
+];
+
+let _model = null; // { trees, treeInfo, baseScores, labels }
+let _modelLoading = false;
+
+async function loadModel() {
+  if (_model) return _model;
+  if (_modelLoading) {
+    // Already loading — wait for it
+    await new Promise(res => setTimeout(res, 200));
+    return _model;
+  }
+  _modelLoading = true;
+  try {
+    const modelData = await fetch(chrome.runtime.getURL('data/model.json')).then(r => r.json());
+    let labelsData = modelData.specter_labels;
+    if (!Array.isArray(labelsData) || labelsData.length === 0) {
+      labelsData = await fetch(chrome.runtime.getURL('data/model_labels.json')).then(r => r.json());
+    }
+    const gbt   = modelData.learner.gradient_booster.model;
+    const lmp   = modelData.learner.learner_model_param;
+    const rawBS = lmp.base_score;
+    const baseScores = typeof rawBS === 'string' ? JSON.parse(rawBS) : rawBS;
+    if (!Array.isArray(baseScores) || labelsData.length !== baseScores.length) {
+      console.warn(
+        '[Specter] ML model label mismatch (expected',
+        baseScores?.length ?? '?',
+        'classes, got',
+        labelsData.length,
+        'names). Rule-based fallback.',
+      );
+      _model = null;
+    } else {
+      _model = { trees: gbt.trees, treeInfo: gbt.tree_info, baseScores, labels: labelsData };
+      chrome.storage.local.set({ 'model:loaded_at': Date.now() });
+      console.log('[Specter] ML model loaded —', labelsData.length, 'classes,', gbt.trees.length, 'trees');
+    }
+  } catch (err) {
+    console.warn('[Specter] Failed to load ML model, using rule-based fallback:', err?.message);
+  }
+  _modelLoading = false;
+  return _model;
+}
+
+function xgbInfer(trees, treeInfo, baseScores, labels, featureVec) {
+  const n = labels.length;
+  const scores = [...baseScores];
+
+  for (let t = 0; t < trees.length; t++) {
+    const classIdx = treeInfo[t];
+    const tree = trees[t];
+    let node = 0;
+    while (tree.left_children[node] !== -1) {
+      const feat  = tree.split_indices[node];
+      const thresh = tree.split_conditions[node];
+      node = featureVec[feat] < thresh
+        ? tree.left_children[node]
+        : tree.right_children[node];
+    }
+    scores[classIdx] += tree.base_weights[node];
+  }
+
+  // Softmax
+  const max  = Math.max(...scores);
+  const exps = scores.map(s => Math.exp(s - max));
+  const sum  = exps.reduce((a, b) => a + b, 0);
+  const probs = exps.map(s => s / sum);
+
+  const maxP     = Math.max(...probs);
+  const classIdx = probs.indexOf(maxP);
+  return { category: labels[classIdx], confidence: +maxP.toFixed(3) };
+}
+
+// Pre-fetch the model on SW startup so it's ready before the first request
+loadModel();
+
 async function classify(features) {
-  return classifyRuleBased(features);
+  // session_replay is not in the model — check rule-based first
+  const ruleResult = classifyRuleBased(features);
+  if (ruleResult.category === 'session_replay') return ruleResult;
+
+  if (!cachedUseMLClassifier) return ruleResult;
+
+  const model = await loadModel();
+  if (!model) return ruleResult; // model failed to load
+
+  const featureVec = MODEL_FEATURE_COLS.map(col => {
+    const v = features[col];
+    return v == null ? 0 : +v;
+  });
+
+  try {
+    const result = xgbInfer(model.trees, model.treeInfo, model.baseScores, model.labels, featureVec);
+    // Attach rule-based feature_importances for explainability in the UI
+    return { ...result, feature_importances: ruleResult.feature_importances };
+  } catch (err) {
+    console.warn('[Specter] xgbInfer error, falling back:', err?.message);
+    return ruleResult;
+  }
 }
 
 // --- Phase 4: session, storage, interception ---
 
 const DEFAULT_SETTINGS = {
   virustotal_api_key: '',
+  virustotal_enabled: true,
   autoscroll_feed: true,
   min_confidence: 0.0,
   data_retention_days: 30,
+  use_ml_classifier: true,
   onboarding_complete: false,
 };
+
+// Cached setting so classify() doesn't hit storage on every request
+let cachedUseMLClassifier = true;
+chrome.storage.local.get('settings').then(({ settings: s }) => {
+  if (s && typeof s.use_ml_classifier === 'boolean') cachedUseMLClassifier = s.use_ml_classifier;
+});
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.settings?.newValue?.use_ml_classifier != null) {
+    cachedUseMLClassifier = changes.settings.newValue.use_ml_classifier;
+  }
+});
 
 let requestBuffer = [];
 let sessionTrackerCount = 0;
