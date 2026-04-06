@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Specter",
-  "version": "1.0.1",
+  "version": "1.1",
   "description": "Browser network traffic analyzer and privacy auditor",
   "icons": {
     "32": "icons/extension/icon32.png",
