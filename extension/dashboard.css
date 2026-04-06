@@ -569,6 +569,10 @@ body,
   color: var(--text-muted);
   letter-spacing: 0.06em;
 }
+.fp-risk-count--secondary {
+  opacity: 0.6;
+  font-size: 10px;
+}
 
 .fp-signals-divider {
   height: 1px;

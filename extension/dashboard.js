@@ -762,7 +762,7 @@ function renderFingerprintingAlerts() {
     fpRequests = [];
   }
 
-  const { byKey, entropy } = analyzeFingerprintSurfaceSignals(fpRequests);
+  const { byKey, entropy, uniqDomains } = analyzeFingerprintSurfaceSignals(fpRequests);
   const tier = entropyTierInfo(entropy);
   const detected = FP_SURFACE_SIGNALS.filter((s) => byKey[s.key].ok);
   const notDetected = FP_SURFACE_SIGNALS.filter((s) => !byKey[s.key].ok);
@@ -782,7 +782,8 @@ function renderFingerprintingAlerts() {
     '<div class="fp-risk-bar-track" aria-hidden="true">' +
     '<div class="fp-risk-bar ' + tier.barCls + '" style="width:' + barPct + '%"></div>' +
     '</div>' +
-    '<span class="fp-risk-count">' + detected.length + ' / ' + FP_SURFACE_SIGNALS.length + ' APIs detected</span>' +
+    '<span class="fp-risk-count">' + detected.length + '\u202f/\u202f' + FP_SURFACE_SIGNALS.length + ' JS APIs</span>' +
+    '<span class="fp-risk-count fp-risk-count--secondary">' + uniqDomains.length + ' network ' + (uniqDomains.length === 1 ? 'domain' : 'domains') + ' classified</span>' +
     '</div>';
   rowsRoot.appendChild(riskRow);
 
