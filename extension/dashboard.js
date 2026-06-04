@@ -2225,8 +2225,6 @@ function buildFilterBar() {
   const toolbar = document.getElementById('feed-toolbar');
   if (!filterBar) return;
 
-  const row1 = document.createElement('div');
-  row1.className = 'feed-filter-row';
   const dropdownWrap = document.createElement('div');
   dropdownWrap.className = 'feed-filter-dropdown';
   dropdownWrap.id = 'feed-category-dropdown';
@@ -2334,8 +2332,6 @@ function buildFilterBar() {
 
   dropdownWrap.appendChild(trigger);
   dropdownWrap.appendChild(panel);
-  row1.appendChild(dropdownWrap);
-  filterBar.appendChild(row1);
 
   const activeFiltersRow = document.createElement('div');
   activeFiltersRow.className = 'feed-filter-row feed-filter-row--active-chips';
@@ -2347,8 +2343,6 @@ function buildFilterBar() {
   activeFiltersRow.appendChild(activeFiltersContainer);
   filterBar.appendChild(activeFiltersRow);
 
-  const row2 = document.createElement('div');
-  row2.className = 'feed-filter-row';
   const tabDropdownWrap = document.createElement('div');
   tabDropdownWrap.className = 'feed-filter-dropdown';
   tabDropdownWrap.id = 'feed-tab-dropdown';
@@ -2456,8 +2450,10 @@ function buildFilterBar() {
 
   tabDropdownWrap.appendChild(tabTrigger);
   tabDropdownWrap.appendChild(tabPanel);
-  row2.appendChild(tabDropdownWrap);
   populateTabPanel();
+
+  const confidenceRow = document.createElement('div');
+  confidenceRow.className = 'feed-filter-row feed-filter-row--confidence';
 
   const confidenceWrap = document.createElement('div');
   confidenceWrap.className = 'feed-confidence-wrap';
@@ -2496,8 +2492,8 @@ function buildFilterBar() {
   });
   confidenceWrap.appendChild(confidenceLabel);
   confidenceWrap.appendChild(confidenceInput);
-  row2.appendChild(confidenceWrap);
-  filterBar.appendChild(row2);
+  confidenceRow.appendChild(confidenceWrap);
+  filterBar.appendChild(confidenceRow);
 
   const row3 = document.createElement('div');
   row3.className = 'feed-filter-row feed-filter-row--domain';
@@ -2563,8 +2559,22 @@ function buildFilterBar() {
   });
 
   if (toolbar) {
-    toolbar.appendChild(collapseWrap);
-    toolbar.appendChild(clearBtn);
+    const controls = document.createElement('div');
+    controls.className = 'feed-toolbar-controls';
+    controls.appendChild(dropdownWrap);
+    controls.appendChild(tabDropdownWrap);
+    const actions = document.createElement('div');
+    actions.className = 'feed-toolbar-actions';
+    actions.appendChild(collapseWrap);
+    actions.appendChild(clearBtn);
+    toolbar.appendChild(controls);
+    toolbar.appendChild(actions);
+  } else {
+    const fallbackRow = document.createElement('div');
+    fallbackRow.className = 'feed-filter-row feed-filter-row--controls';
+    fallbackRow.appendChild(dropdownWrap);
+    fallbackRow.appendChild(tabDropdownWrap);
+    filterBar.insertBefore(fallbackRow, activeFiltersRow);
   }
 
   const container = document.getElementById('feed-container');
