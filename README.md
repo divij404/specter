@@ -1,9 +1,6 @@
 # Specter
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Release](https://img.shields.io/github/v/release/divij404/specter)](https://github.com/divij404/specter/releases)
-[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/dimockbooampdcmcboibloaflhmpokbl?logo=googlechrome\&label=Chrome%20Web%20Store)](https://chromewebstore.google.com/detail/specter/dimockbooampdcmcboibloaflhmpokbl)
-[![Users](https://img.shields.io/chrome-web-store/users/dimockbooampdcmcboibloaflhmpokbl?logo=googlechrome)](https://chromewebstore.google.com/detail/specter/dimockbooampdcmcboibloaflhmpokbl)
+A Chrome extension that records and classifies every network request your browser makes — trackers, analytics, ads, fingerprinting scripts, session replay tools, and more — so you can see (and block) exactly what a site is doing in the background.
 
 > Browser-native privacy and tracker analysis powered by fully local ML inference.
 
@@ -30,42 +27,13 @@ The project also serves as an experiment in running performant ML systems entire
 
 ---
 
-## Features
+## What it does
 
-### Detection & Classification
-
-| Feature                      | Description                                                                                                                                |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **ML Classifier**            | XGBoost model (300 rounds, 5 classes) trained on real browsing telemetry. Confidence scores per request with weighted fallback heuristics. |
-| **Fingerprinting Detection** | Detects canvas, font, WebGL, audio, and related fingerprinting behaviors.                                                                  |
-| **Session Replay Detection** | Identifies tools such as Hotjar and FullStory using rule-based analysis.                                                                   |
-| **Explainability Panel**     | Displays feature importances and top classification signals for each request.                                                              |
-| **Privacy Score**            | Real-time per-site score (0–100) based on tracker density, fingerprinting exposure, replay scripts, and ad activity.                       |
-
-### Visualization & Analysis
-
-| Feature               | Description                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------- |
-| **Live Feed**         | Real-time stream of classified requests with filtering, grouping, and pause/resume controls. |
-| **Timeline View**     | D3.js-powered request timeline color-coded by category.                                      |
-| **Site Summary**      | Per-site breakdown with category distribution and request composition.                       |
-| **Request Inspector** | Full URL breakdown, headers, metadata, response information, and classification details.     |
-
-### Session Management
-
-| Feature             | Description                                                                   |
-| ------------------- | ----------------------------------------------------------------------------- |
-| **Session History** | Stores browsing sessions locally with sortable summaries and site breakdowns. |
-| **Export Tools**    | Export complete session JSON or copy plain-text reports.                      |
-| **Local Storage**   | All session data stored in `chrome.storage.local`.                            |
-
-### Training & Developer Tooling
-
-| Feature                   | Description                                                             |
-| ------------------------- | ----------------------------------------------------------------------- |
-| **Training Crawl Engine** | Built-in Puppeteer crawl pipeline for generating labeled browsing data. |
-| **Model Retraining**      | Retrain locally using exported sessions and custom crawl data.          |
-| **Rule-Based Fallbacks**  | Weighted heuristics used when ML confidence is insufficient.            |
+- **Classifies** each request using a local XGBoost ML model — no cloud calls, no latency
+- **Blocks** trackers and strips tracking parameters from URLs using Chrome's `declarativeNetRequest` API (opt-in, off by default)
+- **Shows** a live feed of requests as you browse, color-coded by category and confidence score
+- **Scores** each site 0–100 based on tracker density, fingerprinting exposure, and ad activity
+- **Stores** every session locally so you can review your browsing history and compare sites over time
 
 ---
 
@@ -243,8 +211,11 @@ Optional VirusTotal lookups are disabled by default and require a user-provided 
 | `session:current`       | Active session metadata    |
 | `requests:{session_id}` | Classified request objects |
 | `scores:{session_id}`   | Per-site privacy scores    |
-| `sessions:history`      | Session summaries          |
-| `settings`              | User preferences           |
+| `sessions:history`           | Session summaries                          |
+| `settings`                   | User preferences                           |
+| `blocking:dynamic_domains`   | Domains promoted to DNR block rules        |
+| `blocking:allowlist`         | Per-site domain overrides                  |
+| `blocking:stats:{session_id}`| Blocked/stripped counts per session        |
 
 ---
 
@@ -252,13 +223,11 @@ Optional VirusTotal lookups are disabled by default and require a user-provided 
 
 ### Chrome Web Store
 
-Install directly from the Chrome Web Store:
-
-https://chromewebstore.google.com/detail/specter/dimockbooampdcmcboibloaflhmpokbl
+Install directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/specter/dimockbooampdcmcboibloaflhmpokbl).
 
 ---
 
-### Development Setup
+### Development setup
 
 ```bash
 npm install
@@ -268,31 +237,78 @@ npm run bundle-libs
 Load the extension:
 
 1. Open `chrome://extensions`
-2. Enable Developer Mode
-3. Click **Load unpacked**
-4. Select the `extension/` directory
+2. Enable **Developer mode**
+3. Click **Load unpacked** and select the `extension/` folder
+4. Pin the Specter icon to your toolbar
 
 The extension ships as plain JavaScript with no frontend build system.
 
----
-
-## Requirements
-
-* Chrome 114+
-* Node.js 18+ (development only)
+**Requirements:** Chrome 114+ · Node.js 18+ (build step only)
 
 ---
 
-## Project Structure
+## Usage
+
+### Start a session
+
+Click the Specter icon in your toolbar, then click **▶ NEW SESSION**. Browse normally. Specter records every request in the background.
+
+### Read the live feed
+
+Open the dashboard (`OPEN DASHBOARD` in the popup). The feed shows each request with its category, domain, confidence score, and size. Click any row to see the full URL, headers, response metadata, and which signals drove the classification.
+
+### Enable blocking
+
+Go to **Settings → Blocking** and toggle **Enable blocking**. Blocking is off by default.
+
+With blocking on, Specter:
+- Blocks high-confidence trackers using `declarativeNetRequest` dynamic rules
+- Strips tracking parameters (`fbclid`, `gclid`, `utm_*`, etc.) from URLs before requests are sent
+- Shows a red `BLOCKED` or amber `STRIPPED` badge on affected feed rows
+
+If a site breaks, click the blocked request in the feed and choose **Allow on this site** or **Allow everywhere** to add it to the allow-list.
+
+### Review session history
+
+Click the clock icon in the dashboard nav to open **Session History**. Click any session to see a per-site breakdown with tracker counts and privacy scores. Export a full JSON dump or copy a plain-text report.
+
+---
+
+## Configuration
+
+All settings are in **Dashboard → Settings**.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Autoscroll | On | Feed scrolls to new rows automatically |
+| Min confidence | 0% | Hides requests classified below this confidence |
+| Data retention | Forever | Auto-delete sessions older than N days |
+| VirusTotal API key | — | Enables domain reputation lookups in the detail panel |
+| Use ML classifier | On | Switch to rule-based classifier if off |
+| Enable blocking | **Off** | Master switch for the blocking engine |
+| Blocking mode | Smart | Smart (ML-driven) · Strict (all third-party) · Param strip only |
+| Block threshold | 85% | Confidence required to block in Smart mode |
+| Block session replay | On | Always block Hotjar, FullStory, LogRocket, etc. |
+| Block fingerprinting | On | Always block canvas/font/WebGL fingerprint scripts |
+| Block behavioral | On | Block behavioral trackers above threshold |
+| Block ad networks | On | Block ad exchanges and bidding infrastructure above threshold |
+| Block analytics | **Off** | Block analytics (may break some sites) |
+
+---
+
+## Project structure
 
 ```text
 specter/
-├── extension/
+├── extension/               Chrome extension (load this folder)
 │   ├── dashboard.html/js/css
 │   ├── popup.html/js/css
+│   ├── blocking-ui.js       Blocking settings UI + feed badges
+│   ├── blocking.js          Adaptive blocking engine (DNR rules)
 │   ├── service_worker.js
+│   ├── shared.css
 │   └── data/
-│       ├── blocklist.json
+│       ├── blocking_rules.json
 │       ├── model.json
 │       ├── model_labels.json
 │       └── sites.txt
@@ -324,6 +340,18 @@ specter/
 
 ---
 
+## Contributing
+
+1. Load the extension unpacked as described in [Development setup](#development-setup)
+2. Edit files in `extension/` — changes take effect after clicking **⟳** in `chrome://extensions`
+3. The service worker reloads automatically when you restart a session from the popup
+4. No build step for the extension itself — only `npm run bundle-libs` is needed once
+
+> [!NOTE]
+> The extension uses Manifest V3. `webRequestBlocking` is not available to regular (non-enterprise) MV3 extensions. All blocking is done via `declarativeNetRequest`. Do not add `webRequest` blocking listeners — they will be silently ignored.
+
+---
+
 ## License
 
-MIT — Divij Agarwal
+MIT — Divij Agarwal. See [LICENSE](LICENSE).

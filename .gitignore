@@ -1,5 +1,6 @@
 # Planning docs 
 _planning/
+DECISIONS.md
 
 # Dependencies
 node_modules/
