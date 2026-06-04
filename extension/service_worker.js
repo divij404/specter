@@ -212,6 +212,18 @@ const CDN_PATTERN = /cloudflare|fastly|akamai|akamaized|cloudfront|jsdelivr|unpk
 // These are first-party asset hosts that don't match the generic CDN pattern above.
 const BRAND_CDN_DOMAIN = /cdn|assets?|images?|img|static|media|content/i;
 
+/** Page-owned asset host (e.g. github.com → githubassets.com, spotify.com → spotifycdn.com). */
+function isBrandSiblingAssetHost(pageDomain, targetDomain) {
+  if (!pageDomain || !targetDomain || pageDomain === targetDomain) return false;
+  const stem = pageDomain.split('.')[0];
+  if (stem.length < 4) return false;
+  if (!targetDomain.startsWith(stem)) return false;
+  if (!BRAND_CDN_DOMAIN.test(targetDomain)) return false;
+  // Generic multi-tenant CDNs: prefix match is coincidental (e.g. unrelated site → cloudfront.net).
+  if (CDN_PATTERN.test(targetDomain)) return false;
+  return true;
+}
+
 // Known tracker subdomains
 const TRACKER_SUBDOMAIN_PATTERN = /^(ads?|track(ing)?|pixel|beacon|analytics?|metrics?|collect|log|stat(s)?|telemetry|event(s)?|monitor|probe)\./i;
 
@@ -308,6 +320,10 @@ function extractFeatures(details) {
     path_matches_fingerprint: FINGERPRINT_PATH.test(path),
     path_matches_ad: AD_PATH.test(path),
     in_blocklist: blocklistDomains.has(domain),
+    brand_sibling_asset:
+      !!initiatorDomain &&
+      domain !== initiatorDomain &&
+      isBrandSiblingAssetHost(initiatorDomain, domain),
 
     // Timing
     ms_since_nav_start: details.timeStamp - getNavStartTime(details.tabId),
@@ -342,11 +358,13 @@ function classifyRuleBased(features) {
   if (features.path_matches_session_replay)     add('session_replay', 'session_replay_path',    0.85);
 
   // ── Fingerprinting ──────────────────────────────────────────────────────
-  if (features.path_matches_fingerprint)        add('fingerprinting', 'fingerprint_path',       0.90);
-  if (features.subdomain_is_tracker && features.loads_as_script && features.is_third_party)
-                                                add('fingerprinting', 'tracker_subdomain_script', 0.40);
-  if (features.has_cors_header && features.loads_as_script && features.is_third_party)
-                                                add('fingerprinting', 'cors_third_party_script', 0.20);
+  if (!features.brand_sibling_asset) {
+    if (features.path_matches_fingerprint)        add('fingerprinting', 'fingerprint_path',       0.90);
+    if (features.subdomain_is_tracker && features.loads_as_script && features.is_third_party)
+                                                  add('fingerprinting', 'tracker_subdomain_script', 0.40);
+    if (features.has_cors_header && features.loads_as_script && features.is_third_party)
+                                                  add('fingerprinting', 'cors_third_party_script', 0.20);
+  }
 
   // ── Analytics ───────────────────────────────────────────────────────────
   if (features.domain_matches_analytics)        add('analytics', 'analytics_domain',            0.88);
@@ -393,6 +411,10 @@ function classifyRuleBased(features) {
   if (features.is_third_party && BRAND_CDN_DOMAIN.test(features.domain)
       && !features.has_tracking_params && !features.subdomain_is_tracker
       && !features.path_is_tracker)             add('legitimate',  'brand_cdn_domain',           0.60);
+  // Same-brand asset host (githubassets.com, spotifycdn.com) — not a tracker ecosystem edge.
+  if (features.brand_sibling_asset
+      && !features.has_tracking_params && !features.subdomain_is_tracker
+      && !features.path_is_tracker)             add('legitimate',  'brand_sibling_asset',        0.92);
   // Catch-all: no tracking indicators present → weakly legitimate.
   // Covers generic third-party JS/images/API calls that don't match any
   // specific pattern (widgets, embeds, social buttons, etc.).
@@ -528,6 +550,11 @@ async function classify(features) {
   const ruleResult = classifyRuleBased(features);
   if (ruleResult.category === 'session_replay') return ruleResult;
 
+  // Brand sibling assets (e.g. github → githubassets): ML often mislabels as fingerprinting.
+  if (features.brand_sibling_asset && ruleResult.category === 'legitimate') {
+    return ruleResult;
+  }
+
   if (!cachedUseMLClassifier) return ruleResult;
 
   const model = await loadModel();
@@ -540,6 +567,13 @@ async function classify(features) {
 
   try {
     const result = xgbInfer(model.trees, model.treeInfo, model.baseScores, model.labels, featureVec);
+    if (features.brand_sibling_asset) {
+      return {
+        category: 'legitimate',
+        confidence: Math.max(result.confidence, ruleResult.confidence, 0.85),
+        feature_importances: ruleResult.feature_importances,
+      };
+    }
     // Attach rule-based feature_importances for explainability in the UI
     return { ...result, feature_importances: ruleResult.feature_importances };
   } catch (err) {
