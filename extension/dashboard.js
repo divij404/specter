@@ -269,7 +269,7 @@ function renderSiteSummary() {
         'Click ▶ NEW SESSION above or start one from the popup, then browse.'
       );
       renderFingerprintingAlerts();
-      scheduleTimelineRender();
+      scheduleBottomPanelRefresh();
       return;
     }
   } else if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
@@ -279,7 +279,7 @@ function renderSiteSummary() {
       'Visit this site during an active session to see its tracker summary.'
     );
     renderFingerprintingAlerts();
-    scheduleTimelineRender();
+    scheduleBottomPanelRefresh();
     return;
   }
 
@@ -479,7 +479,7 @@ function renderSiteSummary() {
   renderDoughnut(doughnutWrap, categoryCounts);
 
   renderFingerprintingAlerts();
-  scheduleTimelineRender();
+  scheduleBottomPanelRefresh();
 }
 
 function getCategoryColorVar(cat) {
@@ -898,55 +898,69 @@ function buildFingerprintSignalRow(label, ok, domain) {
   return row;
 }
 
-/** When true, bottom zone shows fingerprinting panel (timeline hidden). */
-let fingerprintDrawerOpen = false;
+/** Bottom activity panel: timeline | fingerprint | network */
+let bottomPanelView = 'timeline';
 
 function updateBottomPanelTabs() {
-  const tabTimeline = document.getElementById('bottom-tab-timeline');
-  const tabFp = document.getElementById('bottom-tab-fingerprinting');
-  const onFp = fingerprintDrawerOpen;
-  if (tabTimeline) {
-    tabTimeline.classList.toggle('bottom-panel-tab--active', !onFp);
-    tabTimeline.setAttribute('aria-selected', onFp ? 'false' : 'true');
-  }
-  if (tabFp) {
-    tabFp.classList.toggle('bottom-panel-tab--active', onFp);
-    tabFp.setAttribute('aria-selected', onFp ? 'true' : 'false');
+  const views = ['timeline', 'fingerprint', 'network'];
+  for (const v of views) {
+    const tab = document.getElementById('bottom-tab-' + (v === 'fingerprint' ? 'fingerprinting' : v));
+    if (!tab) continue;
+    const active = bottomPanelView === v;
+    tab.classList.toggle('bottom-panel-tab--active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
   }
 }
 
-function setFingerprintDrawerOpen(open) {
-  fingerprintDrawerOpen = !!open;
+function setBottomPanelView(view) {
+  if (view !== 'timeline' && view !== 'fingerprint' && view !== 'network') return;
+  if (bottomPanelView === view) return;
+  bottomPanelView = view;
   updateBottomPanelTabs();
+
   const stack = document.getElementById('dashboard-bottom-stack');
-  const drawer = document.getElementById('fingerprint-drawer');
   const tlLayer = document.getElementById('dashboard-timeline-layer');
-  if (stack) stack.setAttribute('data-view', fingerprintDrawerOpen ? 'fingerprint' : 'timeline');
-  if (drawer) {
-    drawer.setAttribute('aria-hidden', fingerprintDrawerOpen ? 'false' : 'true');
-  }
-  if (tlLayer) {
-    tlLayer.setAttribute('aria-hidden', fingerprintDrawerOpen ? 'true' : 'false');
-  }
-  if (fingerprintDrawerOpen) {
+  const fpLayer = document.getElementById('fingerprint-drawer');
+  const netLayer = document.getElementById('dashboard-network-layer');
+
+  if (stack) stack.setAttribute('data-view', view);
+  if (tlLayer) tlLayer.setAttribute('aria-hidden', view === 'timeline' ? 'false' : 'true');
+  if (fpLayer) fpLayer.setAttribute('aria-hidden', view === 'fingerprint' ? 'false' : 'true');
+  if (netLayer) netLayer.setAttribute('aria-hidden', view === 'network' ? 'false' : 'true');
+
+  if (view === 'fingerprint') {
     updateFingerprintDrawerHeaderSite();
     renderFingerprintingAlerts();
   }
-  requestAnimationFrame(() => scheduleTimelineRender());
+  if (view === 'timeline') {
+    requestAnimationFrame(() => scheduleTimelineRender());
+  }
+  if (typeof setGraphPanelActive === 'function') {
+    setGraphPanelActive(view === 'network');
+  }
 }
 
-function setupFingerprintDrawer() {
-  document.getElementById('bottom-tab-timeline')?.addEventListener('click', () => {
-    if (!fingerprintDrawerOpen) return;
-    setFingerprintDrawerOpen(false);
-  });
-  document.getElementById('bottom-tab-fingerprinting')?.addEventListener('click', () => {
-    if (fingerprintDrawerOpen) return;
-    setFingerprintDrawerOpen(true);
-  });
-  document.getElementById('fingerprint-drawer-close')?.addEventListener('click', () => {
-    setFingerprintDrawerOpen(false);
-  });
+function scheduleBottomPanelRefresh() {
+  if (bottomPanelView === 'timeline') scheduleTimelineRender();
+  else if (bottomPanelView === 'network' && typeof scheduleGraphRender === 'function') scheduleGraphRender();
+  else if (bottomPanelView === 'fingerprint') renderFingerprintingAlerts();
+}
+
+function filterFeedByDomain(domain) {
+  if (!domain || domain === '_direct') return;
+  filterState.domainSearch = domain;
+  const domainEl = document.getElementById('filter-domain');
+  if (domainEl) domainEl.value = domain;
+  updateActiveFilterChips();
+  renderFeed(false);
+  scheduleBottomPanelRefresh();
+}
+
+function setupBottomPanelTabs() {
+  document.getElementById('bottom-tab-timeline')?.addEventListener('click', () => setBottomPanelView('timeline'));
+  document.getElementById('bottom-tab-fingerprinting')?.addEventListener('click', () => setBottomPanelView('fingerprint'));
+  document.getElementById('bottom-tab-network')?.addEventListener('click', () => setBottomPanelView('network'));
+  document.getElementById('fingerprint-drawer-close')?.addEventListener('click', () => setBottomPanelView('timeline'));
   updateBottomPanelTabs();
 }
 
@@ -1824,7 +1838,7 @@ function renderFeed(animateLast = false) {
     }
     renderFeedRows(filtered, animateLast);
   } finally {
-    scheduleTimelineRender();
+    scheduleBottomPanelRefresh();
   }
 }
 
@@ -2508,6 +2522,7 @@ function buildFilterBar() {
     filterState.minConfidence = v;
     updateActiveFilterChips();
     renderFeed(false);
+    scheduleBottomPanelRefresh();
   });
   confidenceWrap.appendChild(confidenceLabel);
   confidenceWrap.appendChild(confidenceInput);
@@ -2525,6 +2540,7 @@ function buildFilterBar() {
     filterState.domainSearch = domainInput.value;
     updateActiveFilterChips();
     renderFeed(false);
+    scheduleBottomPanelRefresh();
   });
   row3.appendChild(domainInput);
   filterBar.appendChild(row3);
@@ -2575,6 +2591,7 @@ function buildFilterBar() {
     if (collapseCheckbox) collapseCheckbox.checked = true;
     renderFilterChips();
     renderFeed(false);
+    scheduleBottomPanelRefresh();
   });
 
   if (toolbar) {
@@ -2808,7 +2825,17 @@ function setupTooltips() {
 
 function init() {
   setupTooltips();
-  setupFingerprintDrawer();
+  setupBottomPanelTabs();
+  if (typeof initGraphPanel === 'function') {
+    initGraphPanel({
+      getGraphRequests: getTimelineRequests,
+      feedRequestsLength: () => feedRequests.length,
+      getCategoryColorHex,
+      categoryLabel,
+      formatSiteDisplayName,
+      onNodeClick: filterFeedByDomain,
+    });
+  }
   buildFilterBar();
   initHistoryOverlay();
   initSettingsOverlay();
@@ -2822,8 +2849,8 @@ function init() {
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (fingerprintDrawerOpen) {
-        setFingerprintDrawerOpen(false);
+      if (bottomPanelView !== 'timeline') {
+        setBottomPanelView('timeline');
         return;
       }
       const siteSummaryPanel = document.querySelector('#site-summary-dropdown .feed-filter-dropdown-panel');
@@ -2996,7 +3023,7 @@ function init() {
         updateNewPill(true);
       }
       renderFeed(true);
-      if (fingerprintDrawerOpen) {
+      if (bottomPanelView === 'fingerprint') {
         if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) {
           renderFingerprintingAlerts();
         } else if (
@@ -3006,6 +3033,8 @@ function init() {
         ) {
           renderFingerprintingAlerts();
         }
+      } else if (bottomPanelView === 'network' && typeof scheduleGraphRender === 'function') {
+        scheduleGraphRender();
       }
     } else if (message.type === 'score_update') {
       if (message.domain != null && message.score != null) {
