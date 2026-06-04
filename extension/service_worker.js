@@ -4,6 +4,13 @@
 // classifier instead. Same API as before so you can swap in ONNX or TensorFlow.js later
 // (e.g. in an offscreen document or dashboard page).
 
+// ── Adaptive Blocking Engine ──────────────────────────────────────────────────
+// blocking.js is loaded below and exposes initBlocking, shouldBlock,
+// handleOnBeforeRequest, handlePostClassify, allowDomain, rebuildDNRRules,
+// applySettingsUpdate, flushBlockStats, getBlockingStats, setTabUrlCacheRef,
+// deleteTabUrlCacheRef as module-level globals (importScripts style).
+importScripts('blocking.js');
+
 let blocklistDomains = new Set();
 
 async function initModel() {
@@ -74,9 +81,12 @@ async function saveCrawlState(state) {
 
 // Restore crawl state on SW wake-up (zero-cost if no crawl is running)
 chrome.storage.session.get('crawl:state').then((r) => { crawlState = r['crawl:state'] || null; });
+// Restore blocking state on SW wake-up
+initBlocking();
 chrome.tabs.onRemoved.addListener((tabId) => {
   TAB_URL_CACHE.delete(tabId);
   NAV_START_CACHE.delete(tabId);
+  deleteTabUrlCacheRef(tabId);
 });
 
 // Known second-level TLDs that require 3 parts for a valid eTLD+1
@@ -472,6 +482,16 @@ const DEFAULT_SETTINGS = {
   data_retention_days: 30,
   use_ml_classifier: true,
   onboarding_complete: false,
+  // ── Blocking (v1.2) ────────────────────────────────────────────────────
+  blocking_enabled:     false,    // master switch — opt-in only
+  blocking_mode:        'smart',  // 'smart' | 'strict' | 'strip_only'
+  block_threshold:      0.85,     // confidence ≥ this → block
+  strip_threshold:      0.55,     // confidence ≥ this → strip params
+  block_session_replay: true,
+  block_fingerprinting: true,
+  block_behavioral:     true,
+  block_ad_network:     true,
+  block_analytics:      false,    // off by default — high breakage risk
 };
 
 // Cached setting so classify() doesn't hit storage on every request
@@ -482,6 +502,9 @@ chrome.storage.local.get('settings').then(({ settings: s }) => {
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.settings?.newValue?.use_ml_classifier != null) {
     cachedUseMLClassifier = changes.settings.newValue.use_ml_classifier;
+  }
+  if (changes.settings?.newValue) {
+    applySettingsUpdate(changes.settings.newValue);
   }
 });
 
@@ -654,17 +677,24 @@ async function batchWrite(request) {
   if (requestBuffer.length >= 10) await flushBuffer();
 }
 
+// Navigation tracking — synchronous, no blocking
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (details.type === 'main_frame') {
       NAV_START_CACHE.set(details.tabId, details.timeStamp);
       try {
-        TAB_URL_CACHE.set(details.tabId, extractETLDPlusOne(new URL(details.url).hostname));
+        const domain = extractETLDPlusOne(new URL(details.url).hostname);
+        TAB_URL_CACHE.set(details.tabId, domain);
+        setTabUrlCacheRef(details.tabId, domain); // keep blocking.js cache in sync
       } catch {}
     }
   },
   { urls: ['<all_urls>'], types: ['main_frame'] }
 );
+
+// Note: MV3 does not support webRequestBlocking for regular extensions.
+// Param stripping is handled via DNR redirect rules (see blocking.js buildParamStripRules).
+// Domain blocking is handled via DNR block rules (dynamic ruleset).
 
 chrome.webRequest.onCompleted.addListener(
   async (details) => {
@@ -683,6 +713,13 @@ chrome.webRequest.onCompleted.addListener(
       confidence: classification.confidence,
       feature_importances: classification.feature_importances,
     };
+    // ── Blocking decision ───────────────────────────────────────────────────
+    const blockDecision = await handlePostClassify(features, classification, session.id);
+    if (blockDecision.action !== 'observe') {
+      request.block_action  = blockDecision.action;
+      request.block_reason  = blockDecision.reason || null;
+    }
+
     await batchWrite(request);
     if (classification.category !== 'legitimate' && classification.category !== 'unclassified') {
       sessionTrackerCount += 1;
@@ -690,6 +727,11 @@ chrome.webRequest.onCompleted.addListener(
     }
     await updateSiteScore(features.initiator_domain, features.domain, classification.category);
     broadcastToDashboard({ type: 'request_update', request });
+
+    // Notify dashboard of blocking action separately so it can update counters
+    if (blockDecision.action === 'block' || blockDecision.action === 'strip_params') {
+      broadcastToDashboard({ type: 'block_action', action: blockDecision.action, domain: features.domain, reason: blockDecision.reason });
+    }
   },
   { urls: ['<all_urls>'] },
   ['responseHeaders', 'extraHeaders']
@@ -761,8 +803,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'stop_session') {
-    chrome.storage.local.get('session:current').then((r) => {
+    chrome.storage.local.get('session:current').then(async (r) => {
       const sessionId = r['session:current']?.id;
+      if (sessionId) await flushBlockStats(sessionId);
       stopSession().then(() => {
         if (sessionId) broadcastToDashboard({ type: 'session_stopped', session_id: sessionId });
         sendResponse({ ok: true });
@@ -847,6 +890,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       });
     return true;
   }
+  if (message.type === 'allow_domain') {
+    const { domain, site } = message;
+    if (!domain) { sendResponse({ ok: false, error: 'missing domain' }); return; }
+    allowDomain(domain, site || '*').then(() => {
+      broadcastToDashboard({ type: 'domain_allowed', domain, site: site || '*' });
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+  if (message.type === 'get_blocking_stats') {
+    const sid = message.session_id;
+    getBlockingStats(sid).then((stats) => sendResponse({ ok: true, stats }));
+    return true;
+  }
+  if (message.type === 'rebuild_dnr_rules') {
+    rebuildDNRRules().then(() => sendResponse({ ok: true }));
+    return true;
+  }
   sendResponse({ ok: false });
 });
 
@@ -854,9 +915,11 @@ self.addEventListener('install', () => {
   initModel();
   initBlocklist();
   ensureSettings();
+  initBlocking();
 });
 
 self.addEventListener('activate', () => {
   initModel();
   initBlocklist();
+  initBlocking();
 });

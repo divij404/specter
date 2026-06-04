@@ -12,3 +12,6 @@ tools/exports/
 
 specter.zip
 specter-extension.zip
+
+# Chrome-generated DNR ruleset index (local dev load)
+extension/_metadata/

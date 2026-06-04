@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["doubleclick.net"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 2, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["googleadservices.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 3, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["hotjar.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 4, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["fullstory.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 5, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["logrocket.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 6, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["mouseflow.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 7, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["smartlook.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 8, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["crazyegg.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 9, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["fingerprintjs.com"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  },
+  {
+    "id": 10, "priority": 1,
+    "action": { "type": "block" },
+    "condition": { "requestDomains": ["fpjs.io"], "resourceTypes": ["script","image","xmlhttprequest","sub_frame"] }
+  }
+]

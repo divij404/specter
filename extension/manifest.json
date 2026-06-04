@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Specter",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Browser network traffic analyzer and privacy auditor",
   "icons": {
     "32": "icons/extension/icon32.png",
@@ -12,12 +12,21 @@
   },
   "permissions": [
     "webRequest",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
     "storage",
     "unlimitedStorage",
     "tabs",
     "activeTab",
     "alarms"
   ],
+  "declarative_net_request": {
+    "rule_resources": [{
+      "id": "specter_blocking",
+      "enabled": false,
+      "path": "data/blocking_rules.json"
+    }]
+  },
   "host_permissions": [
     "<all_urls>"
   ],
