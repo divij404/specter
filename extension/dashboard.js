@@ -2312,24 +2312,6 @@ function buildFilterBar() {
     }
   }
 
-  function setPanelOpen(open) {
-    panel.classList.toggle('is-open', open);
-    dropdownWrap.setAttribute('data-open', open ? 'true' : 'false');
-    trigger.setAttribute('aria-expanded', String(open));
-  }
-
-  trigger.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isOpen = panel.classList.contains('is-open');
-    setPanelOpen(!isOpen);
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!dropdownWrap.contains(e.target)) {
-      setPanelOpen(false);
-    }
-  });
-
   dropdownWrap.appendChild(trigger);
   dropdownWrap.appendChild(panel);
 
@@ -2427,10 +2409,24 @@ function buildFilterBar() {
   }
 
   function setTabPanelOpen(open) {
+    if (open) setPanelOpen(false);
     tabPanel.classList.toggle('is-open', open);
     tabDropdownWrap.setAttribute('data-open', open ? 'true' : 'false');
     tabTrigger.setAttribute('aria-expanded', String(open));
   }
+
+  function setPanelOpen(open) {
+    if (open) setTabPanelOpen(false);
+    panel.classList.toggle('is-open', open);
+    dropdownWrap.setAttribute('data-open', open ? 'true' : 'false');
+    trigger.setAttribute('aria-expanded', String(open));
+  }
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = panel.classList.contains('is-open');
+    setPanelOpen(!isOpen);
+  });
 
   tabTrigger.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2443,9 +2439,8 @@ function buildFilterBar() {
   });
 
   document.addEventListener('click', (e) => {
-    if (!tabDropdownWrap.contains(e.target)) {
-      setTabPanelOpen(false);
-    }
+    if (!dropdownWrap.contains(e.target)) setPanelOpen(false);
+    if (!tabDropdownWrap.contains(e.target)) setTabPanelOpen(false);
   });
 
   tabDropdownWrap.appendChild(tabTrigger);
