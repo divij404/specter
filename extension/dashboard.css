@@ -1789,6 +1789,16 @@ body,
 .feed-filter-dropdown-option.is-selected {
   background: var(--accent-dim);
   color: var(--accent);
+  font-weight: 600;
+}
+
+.feed-filter-dropdown-option.is-selected::before {
+  content: '✓';
+  display: inline-block;
+  width: 1em;
+  margin-right: 4px;
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .feed-filter-dropdown-option input {

@@ -929,6 +929,7 @@ function updateBottomPanelTabs() {
 function setBottomPanelView(view) {
   if (view !== 'timeline' && view !== 'fingerprint' && view !== 'network') return;
   if (bottomPanelView === view) return;
+  hideSpecterTooltip();
   bottomPanelView = view;
   updateBottomPanelTabs();
 
@@ -1067,6 +1068,7 @@ function buildSiteSummaryDropdown(container) {
     wrap.setAttribute('data-open', open ? 'true' : 'false');
     trigger.setAttribute('aria-expanded', String(open));
     panel.classList.toggle('is-open', open);
+    if (open) hideSpecterTooltip();
   }
 
   trigger.addEventListener('click', (e) => {
@@ -1076,6 +1078,7 @@ function buildSiteSummaryDropdown(container) {
 
   document.addEventListener('click', (e) => {
     if (!wrap.contains(e.target)) setOpen(false);
+    hideSpecterTooltip();
   });
 
   wrap.appendChild(trigger);
@@ -1714,7 +1717,6 @@ function renderFeedRows(filtered, animateLast) {
       urlCellClass = ' feed-cell-url--multiple';
     }
 
-    const badgeTip = categoryTooltip(req.category) || (categoryLabel(req.category) + ' — category');
     const groupKey = feedGroupKey(req);
     const isExpanded = isGroup && count > 1 && expandedGroups.has(groupKey);
     const blockDisplay = isGroup ? pickGroupBlockDisplay(g.requests) : (req.block_action ? { action: req.block_action, reason: req.block_reason } : null);
@@ -1732,18 +1734,20 @@ function renderFeedRows(filtered, animateLast) {
     row.innerHTML =
       '<span class="feed-cell feed-cell-badge"><span class="feed-badge ' +
       badgeClass +
-      '" data-tooltip="' +
-      escapeAttr(badgeTip) +
       '"><span class="feed-badge-dot"></span>' +
       escapeAttr(categoryLabel(req.category)) +
       '</span></span>' +
-      '<span class="feed-cell feed-cell-domain"' + (req.domain ? ' data-tooltip="' + escapeAttr(req.domain) + '"' : '') + '>' +
+      '<span class="feed-cell feed-cell-domain"' +
+      (req.domain ? ' title="' + escapeAttr(req.domain) + '"' : '') +
+      '>' +
       escapeAttr(req.domain || '—') +
       (blockDisplay && typeof renderBlockingBadge === 'function' ? renderBlockingBadge(blockDisplay.action, blockDisplay.reason) : '') +
       countHtml +
       expandBtnHtml +
       '</span>' +
-      '<span class="feed-cell feed-cell-url' + urlCellClass + '"' + (urlFull ? ' data-tooltip="' + escapeAttr(urlFull) + '"' : '') + '>' +
+      '<span class="feed-cell feed-cell-url' + urlCellClass + '"' +
+      (urlFull ? ' title="' + escapeAttr(urlFull) + '"' : '') +
+      '>' +
       escapeAttr(urlDisplay) +
       '</span>' +
       '<span class="feed-cell feed-cell-conf">' +
@@ -1802,7 +1806,9 @@ function renderFeedRows(filtered, animateLast) {
           : '—';
         subRow.innerHTML =
           '<span class="feed-cell feed-cell-badge feed-cell-badge--sub"></span>' +
-          '<span class="feed-cell feed-cell-domain feed-cell-domain--sub" ' + (subReq.domain ? 'data-tooltip="' + escapeAttr(subReq.url || subReq.domain) + '"' : '') + '>' +
+          '<span class="feed-cell feed-cell-domain feed-cell-domain--sub" ' +
+          (subReq.url ? 'title="' + escapeAttr(subReq.url) + '"' : '') +
+          '>' +
           '<span class="feed-sub-indent" aria-hidden="true">└</span>' +
           escapeAttr(subPathDisplay) +
           (subReq.block_action && typeof renderBlockingBadge === 'function' ? renderBlockingBadge(subReq.block_action, subReq.block_reason) : '') +
@@ -1829,6 +1835,7 @@ function renderFeedRows(filtered, animateLast) {
 }
 
 function renderFeed(animateLast = false) {
+  hideSpecterTooltip();
   try {
     const filtered = applyFilters(feedRequests);
     const list = document.getElementById('feed-list');
@@ -2419,6 +2426,16 @@ function buildFilterBar() {
   tabPanel.className = 'feed-filter-dropdown-panel';
   tabPanel.setAttribute('role', 'listbox');
 
+  function syncTabDropdownSelection() {
+    tabPanel.querySelectorAll('.feed-filter-dropdown-option').forEach((opt) => {
+      const v = opt.getAttribute('data-value');
+      const isAll = filterState.tabFilter !== 'current' || currentTabId == null;
+      const selected = isAll ? v === '' : String(currentTabId) === v;
+      opt.classList.toggle('is-selected', selected);
+      opt.setAttribute('aria-selected', selected ? 'true' : 'false');
+    });
+  }
+
   function updateTabTriggerLabel() {
     const el = document.getElementById('feed-tab-trigger-label');
     if (!el) return;
@@ -2449,6 +2466,7 @@ function buildFilterBar() {
       allOpt.addEventListener('click', () => {
         filterState.tabFilter = 'all';
         currentTabId = null;
+        syncTabDropdownSelection();
         setTabPanelOpen(false);
         updateTabTriggerLabel();
         updateActiveFilterChips();
@@ -2466,6 +2484,7 @@ function buildFilterBar() {
         opt.addEventListener('click', () => {
           filterState.tabFilter = 'current';
           currentTabId = tab.id;
+          syncTabDropdownSelection();
           setTabPanelOpen(false);
           updateTabTriggerLabel();
           updateActiveFilterChips();
@@ -2473,19 +2492,27 @@ function buildFilterBar() {
         });
         tabPanel.appendChild(opt);
       });
+      syncTabDropdownSelection();
       updateTabTriggerLabel();
     });
   }
 
   function setTabPanelOpen(open) {
-    if (open) setPanelOpen(false);
+    if (open) {
+      setPanelOpen(false);
+      hideSpecterTooltip();
+    }
     tabPanel.classList.toggle('is-open', open);
     tabDropdownWrap.setAttribute('data-open', open ? 'true' : 'false');
     tabTrigger.setAttribute('aria-expanded', String(open));
+    if (open) syncTabDropdownSelection();
   }
 
   function setPanelOpen(open) {
-    if (open) setTabPanelOpen(false);
+    if (open) {
+      setTabPanelOpen(false);
+      hideSpecterTooltip();
+    }
     panel.classList.toggle('is-open', open);
     dropdownWrap.setAttribute('data-open', open ? 'true' : 'false');
     trigger.setAttribute('aria-expanded', String(open));
@@ -2510,6 +2537,7 @@ function buildFilterBar() {
   document.addEventListener('click', (e) => {
     if (!dropdownWrap.contains(e.target)) setPanelOpen(false);
     if (!tabDropdownWrap.contains(e.target)) setTabPanelOpen(false);
+    hideSpecterTooltip();
   });
 
   tabDropdownWrap.appendChild(tabTrigger);
@@ -2656,19 +2684,6 @@ function buildFilterBar() {
         updateNewPill(false);
       }
     });
-    container.addEventListener('click', (e) => {
-      if (e.target.closest('.feed-row')) return;
-      if (feedPaused) return;
-      feedPaused = true;
-      if (currentSession && currentSession.active && sessionStartTime) {
-        frozenElapsedSeconds = Math.floor((Date.now() - sessionStartTime) / 1000);
-        stopSessionTimer();
-      }
-      const overlay = document.getElementById('feed-pause-overlay');
-      if (overlay) overlay.hidden = false;
-      updateFeedHeaderDot();
-      updatePauseButton();
-    });
   }
   const pauseOverlay = document.getElementById('feed-pause-overlay');
   if (pauseOverlay) {
@@ -2814,46 +2829,84 @@ function hideSessionConfirmBar() {
   if (confirmEl) confirmEl.hidden = true;
 }
 
+let specterTooltipTimeout = null;
+let specterTooltipHoverTarget = null;
+
+function hideSpecterTooltip() {
+  if (specterTooltipTimeout) {
+    clearTimeout(specterTooltipTimeout);
+    specterTooltipTimeout = null;
+  }
+  specterTooltipHoverTarget = null;
+  const tooltipEl = document.getElementById('specter-tooltip');
+  if (!tooltipEl) return;
+  tooltipEl.classList.remove('is-visible');
+  tooltipEl.setAttribute('aria-hidden', 'true');
+  tooltipEl.textContent = '';
+}
+
+function isAnyDropdownPanelOpen() {
+  return !!document.querySelector(
+    '.feed-filter-dropdown-panel.is-open, .site-summary-dropdown .feed-filter-dropdown-panel.is-open',
+  );
+}
+
 function setupTooltips() {
   const tooltipEl = document.getElementById('specter-tooltip');
   if (!tooltipEl) return;
-  let showTimeout = null;
-  const delayMs = 400;
+  const delayMs = 500;
 
-  document.body.addEventListener('mouseenter', (e) => {
-    const target = e.target.closest('[data-tooltip]');
-    if (!target) return;
-    const text = target.getAttribute('data-tooltip');
-    if (!text) return;
-    showTimeout = setTimeout(() => {
-      tooltipEl.textContent = text;
-      tooltipEl.setAttribute('aria-hidden', 'false');
-      tooltipEl.classList.add('is-visible');
-      requestAnimationFrame(() => {
-        const rect = target.getBoundingClientRect();
-        const tw = tooltipEl.offsetWidth;
-        const th = tooltipEl.offsetHeight;
-        let left = rect.left + rect.width / 2 - tw / 2;
-        const top = rect.bottom + 6;
-        left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
-        if (top + th > window.innerHeight - 8) {
-          tooltipEl.style.top = (rect.top - th - 6) + 'px';
-        } else {
+  document.body.addEventListener(
+    'pointerover',
+    (e) => {
+      if (historyOverlayOpen() || settingsOverlayOpen() || isAnyDropdownPanelOpen()) return;
+      const target = e.target.closest('[data-tooltip]');
+      if (!target) return;
+      const text = target.getAttribute('data-tooltip');
+      if (!text) return;
+      if (specterTooltipHoverTarget === target) return;
+      specterTooltipHoverTarget = target;
+      if (specterTooltipTimeout) clearTimeout(specterTooltipTimeout);
+      specterTooltipTimeout = setTimeout(() => {
+        specterTooltipTimeout = null;
+        if (specterTooltipHoverTarget !== target) return;
+        tooltipEl.textContent = text;
+        tooltipEl.setAttribute('aria-hidden', 'false');
+        tooltipEl.classList.add('is-visible');
+        requestAnimationFrame(() => {
+          const rect = target.getBoundingClientRect();
+          const tw = tooltipEl.offsetWidth;
+          const th = tooltipEl.offsetHeight;
+          let left = rect.left + rect.width / 2 - tw / 2;
+          let top = rect.bottom + 6;
+          left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+          if (top + th > window.innerHeight - 8) top = rect.top - th - 6;
+          tooltipEl.style.left = left + 'px';
           tooltipEl.style.top = top + 'px';
-        }
-        tooltipEl.style.left = left + 'px';
-      });
-    }, delayMs);
-  }, true);
+        });
+      }, delayMs);
+    },
+    true,
+  );
 
-  document.body.addEventListener('mouseleave', (e) => {
-    const target = e.target.closest('[data-tooltip]');
-    if (!target) return;
-    if (showTimeout) clearTimeout(showTimeout);
-    showTimeout = null;
-    tooltipEl.classList.remove('is-visible');
-    tooltipEl.setAttribute('aria-hidden', 'true');
-  }, true);
+  document.body.addEventListener(
+    'pointerout',
+    (e) => {
+      const target = e.target.closest('[data-tooltip]');
+      if (!target) return;
+      const related = e.relatedTarget;
+      if (related && target.contains(related)) return;
+      if (specterTooltipHoverTarget === target) {
+        specterTooltipHoverTarget = null;
+        hideSpecterTooltip();
+      }
+    },
+    true,
+  );
+
+  document.addEventListener('click', hideSpecterTooltip, true);
+  document.addEventListener('scroll', hideSpecterTooltip, true);
+  window.addEventListener('blur', hideSpecterTooltip);
 }
 
 function init() {
@@ -3161,6 +3214,7 @@ function historyOverlayOpen() {
 }
 
 function openHistoryOverlay() {
+  hideSpecterTooltip();
   const el = document.getElementById('history-overlay');
   if (!el) return;
   el.classList.add('history-overlay--open');
@@ -3478,6 +3532,7 @@ function settingsOverlayOpen() {
 }
 
 function openSettingsOverlay() {
+  hideSpecterTooltip();
   const el = document.getElementById('settings-overlay');
   if (!el) return;
   el.classList.add('settings-overlay--open');
