@@ -567,7 +567,12 @@ async function classify(features) {
 
   try {
     const result = xgbInfer(model.trees, model.treeInfo, model.baseScores, model.labels, featureVec);
-    if (features.brand_sibling_asset) {
+    if (
+      features.brand_sibling_asset &&
+      !features.has_tracking_params &&
+      !features.subdomain_is_tracker &&
+      !features.path_is_tracker
+    ) {
       return {
         category: 'legitimate',
         confidence: Math.max(result.confidence, ruleResult.confidence, 0.85),

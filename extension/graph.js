@@ -22,6 +22,9 @@ let graphResizeObserver = null;
 let graphRenderGeneration = 0;
 
 const GRAPH_BRAND_CDN = /cdn|assets?|images?|img|static|media|content/i;
+/** Keep in sync with service_worker.js CDN_PATTERN */
+const GRAPH_CDN_PATTERN =
+  /cloudflare|fastly|akamai|akamaized|cloudfront|jsdelivr|unpkg|cdnjs|staticfiles|gstatic|googleapis|bootstrapcdn|cloudinary|amazonaws|ytimg|googlevideo|ggpht|ttvnw|jtvnw|twimg|fbcdn|cdninstagram|steamstatic|rbxcdn|discordapp/i;
 
 /** Mirror service_worker brand-sibling heuristic for graph display on stored requests. */
 function isBrandSiblingAssetHost(pageDomain, targetDomain) {
@@ -29,7 +32,9 @@ function isBrandSiblingAssetHost(pageDomain, targetDomain) {
   const stem = pageDomain.split('.')[0];
   if (stem.length < 4) return false;
   if (!targetDomain.startsWith(stem)) return false;
-  return GRAPH_BRAND_CDN.test(targetDomain);
+  if (!GRAPH_BRAND_CDN.test(targetDomain)) return false;
+  if (GRAPH_CDN_PATTERN.test(targetDomain)) return false;
+  return true;
 }
 
 function isGraphInternalSiteKey(id) {
@@ -42,15 +47,6 @@ function isGraphInternalSiteKey(id) {
 function graphResolveSource(initiator, pageHint) {
   if (pageHint && isGraphInternalSiteKey(initiator)) return pageHint;
   return initiator || '_direct';
-}
-
-function graphPageDomainsForBrandMatch(nodeList, pageHint) {
-  const set = new Set();
-  if (pageHint && !isGraphInternalSiteKey(pageHint)) set.add(pageHint);
-  for (const n of nodeList) {
-    if (n.type === 'page' && !isGraphInternalSiteKey(n.id)) set.add(n.id);
-  }
-  return [...set];
 }
 
 function graphRequestCategory(req, pageHint) {
@@ -119,25 +115,6 @@ function buildRequestGraph(requests) {
     if (tgt && tgt.type === 'page') tgt.type = 'tracker';
   }
 
-  const brandPages = graphPageDomainsForBrandMatch([...nodes.values()], pageHint);
-  for (const n of nodes.values()) {
-    if (n.type === 'related') continue;
-    for (const page of brandPages) {
-      if (isBrandSiblingAssetHost(page, n.id)) {
-        n.type = 'related';
-        n.category = 'legitimate';
-        break;
-      }
-    }
-  }
-  for (const e of edgeMap.values()) {
-    const tgt = nodes.get(e.target);
-    if (tgt?.type === 'related') {
-      e.related = true;
-      e.strokeCategory = 'legitimate';
-    }
-  }
-
   for (const n of nodes.values()) {
     if ((n.type === 'tracker' || n.type === 'related') && n.catCounts) {
       let best = n.category;
@@ -172,13 +149,15 @@ function buildRequestGraph(requests) {
     e.strokeCategory = e.related ? 'legitimate' : (tgt?.category || 'unclassified');
   }
 
-  const thirdPartyCount = nodeList.filter((n) => n.type === 'tracker').length;
+  const trackerCount = nodeList.filter((n) => n.type === 'tracker').length;
+  const relatedCount = nodeList.filter((n) => n.type === 'related').length;
 
   return {
     nodes: nodeList,
     edges: edgeList,
     capped,
-    thirdPartyCount,
+    thirdPartyCount: trackerCount,
+    relatedCount,
     nodeById,
   };
 }
@@ -264,8 +243,18 @@ function renderGraphEmpty(container, message, showDragHint) {
     '</div>';
 }
 
-function graphHeadlineText(thirdPartyCount, hasEdges) {
+function graphHeadlineText(thirdPartyCount, relatedCount, hasEdges) {
   if (!hasEdges) return { text: 'No third-party connections in this view', html: false };
+  if (thirdPartyCount === 0 && relatedCount > 0) {
+    return {
+      text:
+        relatedCount +
+        ' same-brand asset ' +
+        (relatedCount === 1 ? 'host' : 'hosts') +
+        ' only — no third-party trackers in this view',
+      html: false,
+    };
+  }
   if (thirdPartyCount === 0) {
     return {
       text: 'Only same-brand asset hosts — no third-party trackers in this view',
@@ -273,15 +262,20 @@ function graphHeadlineText(thirdPartyCount, hasEdges) {
     };
   }
   const n = thirdPartyCount;
-  return {
-    text: null,
-    html:
-      '<strong>' +
-      n +
-      '</strong> third-party ' +
-      (n === 1 ? 'system' : 'systems') +
-      ' detected',
-  };
+  let html =
+    '<strong>' +
+    n +
+    '</strong> third-party ' +
+    (n === 1 ? 'system' : 'systems') +
+    ' detected';
+  if (relatedCount > 0) {
+    html +=
+      ' · <strong>' +
+      relatedCount +
+      '</strong> site asset' +
+      (relatedCount === 1 ? '' : 's');
+  }
+  return { text: null, html };
 }
 
 function graphNodeRadius(d) {
@@ -314,7 +308,7 @@ function renderGraphPanel() {
   }
 
   const requests = graphDeps.getGraphRequests();
-  const { nodes, edges, capped, thirdPartyCount } = buildRequestGraph(requests);
+  const { nodes, edges, capped, thirdPartyCount, relatedCount } = buildRequestGraph(requests);
 
   const dragHintEl = document.getElementById('graph-drag-hint');
   if (dragHintEl) {
@@ -322,7 +316,7 @@ function renderGraphPanel() {
   }
 
   if (headlineEl) {
-    const hl = graphHeadlineText(thirdPartyCount, edges.length > 0);
+    const hl = graphHeadlineText(thirdPartyCount, relatedCount, edges.length > 0);
     if (hl.html) headlineEl.innerHTML = hl.html;
     else headlineEl.textContent = hl.text;
   }
@@ -346,13 +340,18 @@ function renderGraphPanel() {
     } else if (requests.length === 0) {
       msg = 'No requests for the selected site match the current filters.';
     }
-    renderGraphEmpty(container, msg, true);
+    renderGraphEmpty(container, msg, false);
     return;
   }
 
   const W = container.clientWidth || 400;
   const H = container.clientHeight || 200;
-  if (W < 40 || H < 40) return;
+  if (W < 40 || H < 40) {
+    requestAnimationFrame(() => {
+      if (graphPanelActive) scheduleGraphRender(true);
+    });
+    return;
+  }
 
   const VIEW_PAD = 22;
 
@@ -514,6 +513,10 @@ function setGraphPanelActive(active) {
       graphSimulation.stop();
       graphSimulation = null;
     }
+    if (graphResizeObserver) {
+      graphResizeObserver.disconnect();
+      graphResizeObserver = null;
+    }
     graphHideTooltip();
     return;
   }
@@ -532,7 +535,7 @@ function exportGraphSvg() {
   a.href = URL.createObjectURL(blob);
   a.download = 'specter-graph-' + Date.now() + '.svg';
   a.click();
-  URL.revokeObjectURL(a.href);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 function initGraphPanel(deps) {

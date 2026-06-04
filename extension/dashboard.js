@@ -63,6 +63,60 @@ let filterState = {
   domainSearch: '',
   collapseDuplicates: true,
 };
+let feedFilterDebounceTimer = null;
+const FEED_FILTER_DEBOUNCE_MS = 250;
+
+function scheduleFeedFilterRefresh() {
+  if (feedFilterDebounceTimer) clearTimeout(feedFilterDebounceTimer);
+  feedFilterDebounceTimer = setTimeout(() => {
+    feedFilterDebounceTimer = null;
+    if (feedFilterBarInitialized) updateActiveFilterChips();
+    renderFeed(false);
+    scheduleBottomPanelRefresh();
+  }, FEED_FILTER_DEBOUNCE_MS);
+}
+
+let feedFilterBarInitialized = false;
+
+function normalizeMinConfidencePct(raw) {
+  const n = Number(raw) || 0;
+  if (n > 0 && n <= 1) return Math.round(n * 100);
+  return Math.max(0, Math.min(100, n));
+}
+
+function closeFeedCategoryDropdown() {
+  const wrap = document.getElementById('feed-category-dropdown');
+  if (!wrap) return;
+  const panel = wrap.querySelector('.feed-filter-dropdown-panel');
+  const trigger = wrap.querySelector('.feed-filter-dropdown-trigger');
+  if (panel) panel.classList.remove('is-open');
+  wrap.setAttribute('data-open', 'false');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+function closeFeedTabDropdown() {
+  const wrap = document.getElementById('feed-tab-dropdown');
+  if (!wrap) return;
+  const panel = wrap.querySelector('.feed-filter-dropdown-panel');
+  const trigger = wrap.querySelector('.feed-filter-dropdown-trigger');
+  if (panel) panel.classList.remove('is-open');
+  wrap.setAttribute('data-open', 'false');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
+
+function bindFeedFilterOutsideClickOnce() {
+  if (bindFeedFilterOutsideClickOnce._bound) return;
+  bindFeedFilterOutsideClickOnce._bound = true;
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!(t instanceof Node)) return;
+    const catWrap = document.getElementById('feed-category-dropdown');
+    if (catWrap && !catWrap.contains(t)) closeFeedCategoryDropdown();
+    const tabWrap = document.getElementById('feed-tab-dropdown');
+    if (tabWrap && !tabWrap.contains(t)) closeFeedTabDropdown();
+    hideSpecterTooltip();
+  });
+}
 const scrollState = { userScrolledUp: false };
 let requestCount = 0;
 let feedPaused = false;
@@ -189,7 +243,9 @@ function getSummaryTimelineSiteKey() {
 }
 
 function getWorstSiteDomain() {
-  const entries = Object.entries(siteScores);
+  const entries = Object.entries(siteScores).filter(
+    ([, s]) => s && typeof s.privacy_score === 'number',
+  );
   if (entries.length === 0) return null;
   let worst = entries[0];
   for (let i = 1; i < entries.length; i++) {
@@ -963,11 +1019,14 @@ function scheduleBottomPanelRefresh() {
 
 function filterFeedByDomain(domain) {
   if (!domain || domain === '_direct') return;
+  hideSpecterTooltip();
   filterState.domainSearch = domain;
   const domainEl = document.getElementById('filter-domain');
   if (domainEl) domainEl.value = domain;
   updateActiveFilterChips();
   renderFeed(false);
+  const feedContainer = document.getElementById('feed-container');
+  if (feedContainer) feedContainer.scrollTop = 0;
   scheduleBottomPanelRefresh();
 }
 
@@ -1147,13 +1206,27 @@ function applyFilters(requests) {
   });
 }
 
-/** Timeline: session-wide only when "All sites" is selected; otherwise current summary site (or worst site). */
+function isSiteScopeInternalInitiator(id) {
+  if (!id || id === '_direct') return true;
+  const s = String(id);
+  return s.startsWith('[') || /^(chrome|edge|about|devtools|chrome-extension|moz-extension):/i.test(s);
+}
+
+/** Map extension/internal initiators to the browsed site (matches graph + service worker). */
+function resolveInitiatorForSiteScope(req, siteKey) {
+  const initiator = req.initiator_domain || '_direct';
+  if (!siteKey) return initiator;
+  if (isSiteScopeInternalInitiator(initiator)) return siteKey;
+  return initiator;
+}
+
+/** Timeline / network graph: session-wide when "All sites"; otherwise scoped to summary site. */
 function getTimelineRequests() {
   const filtered = applyFilters(feedRequests);
   if (summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES) return filtered;
   const site = getSummaryTimelineSiteKey();
   if (!site) return [];
-  return filtered.filter((r) => (r.initiator_domain || '_direct') === site);
+  return filtered.filter((r) => resolveInitiatorForSiteScope(r, site) === site);
 }
 
 const TIMELINE_CAT_CSS = {
@@ -1665,7 +1738,7 @@ function renderFeedRows(filtered, animateLast) {
       categoryToRowAccentClass(req.category) +
       (isNew ? ' feed-row-enter' : '');
     row.setAttribute('data-request-id', g.id);
-    row.setAttribute('role', 'button');
+    row.setAttribute('role', 'listitem');
     row.setAttribute('tabindex', '0');
 
     const confPct = (conf * 100).toFixed(0);
@@ -1765,6 +1838,7 @@ function renderFeedRows(filtered, animateLast) {
     }
     row.addEventListener('click', () => selectRequest(g.id));
     row.addEventListener('keydown', (e) => {
+      if (e.target.closest('.feed-row-expand-btn')) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         selectRequest(g.id);
@@ -1795,7 +1869,7 @@ function renderFeedRows(filtered, animateLast) {
         const subRow = document.createElement('div');
         subRow.className = 'feed-row feed-row--sub' + (subReq.id === selectedRequestId ? ' feed-row--selected' : '') + subConfClass;
         subRow.setAttribute('data-request-id', subReq.id);
-        subRow.setAttribute('role', 'button');
+        subRow.setAttribute('role', 'listitem');
         subRow.setAttribute('tabindex', '0');
         const subPath = getPathFromUrl(subReq.url);
         const subPathDisplay = subPath ? truncatePath(subPath, 40) : '—';
@@ -1875,6 +1949,8 @@ function renderFeed(animateLast = false) {
       }
     }
     renderFeedRows(filtered, animateLast);
+  } catch (err) {
+    console.error('[Specter] renderFeed failed:', err);
   } finally {
     scheduleBottomPanelRefresh();
   }
@@ -2300,6 +2376,7 @@ function buildFilterBar() {
   const filterBar = document.getElementById('feed-filters');
   const toolbar = document.getElementById('feed-toolbar');
   if (!filterBar) return;
+  if (feedFilterBarInitialized) return;
 
   const dropdownWrap = document.createElement('div');
   dropdownWrap.className = 'feed-filter-dropdown';
@@ -2499,7 +2576,7 @@ function buildFilterBar() {
 
   function setTabPanelOpen(open) {
     if (open) {
-      setPanelOpen(false);
+      closeFeedCategoryDropdown();
       hideSpecterTooltip();
     }
     tabPanel.classList.toggle('is-open', open);
@@ -2510,7 +2587,7 @@ function buildFilterBar() {
 
   function setPanelOpen(open) {
     if (open) {
-      setTabPanelOpen(false);
+      closeFeedTabDropdown();
       hideSpecterTooltip();
     }
     panel.classList.toggle('is-open', open);
@@ -2532,12 +2609,6 @@ function buildFilterBar() {
       populateTabPanel();
       setTabPanelOpen(true);
     }
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!dropdownWrap.contains(e.target)) setPanelOpen(false);
-    if (!tabDropdownWrap.contains(e.target)) setTabPanelOpen(false);
-    hideSpecterTooltip();
   });
 
   tabDropdownWrap.appendChild(tabTrigger);
@@ -2563,7 +2634,7 @@ function buildFilterBar() {
   confidenceInput.id = 'feed-min-confidence';
   confidenceInput.setAttribute('aria-label', 'Minimum confidence percentage (0–100)');
   confidenceInput.addEventListener('change', () => {
-    const v = Math.max(0, Math.min(100, Number(confidenceInput.value) || 0));
+    const v = normalizeMinConfidencePct(confidenceInput.value);
     filterState.minConfidence = v;
     confidenceInput.value = String(v);
     // Sync settings slider if open
@@ -2577,11 +2648,9 @@ function buildFilterBar() {
     renderFeed(false);
   });
   confidenceInput.addEventListener('input', () => {
-    const v = Math.max(0, Math.min(100, Number(confidenceInput.value) || 0));
+    const v = normalizeMinConfidencePct(confidenceInput.value);
     filterState.minConfidence = v;
-    updateActiveFilterChips();
-    renderFeed(false);
-    scheduleBottomPanelRefresh();
+    scheduleFeedFilterRefresh();
   });
   confidenceWrap.appendChild(confidenceLabel);
   confidenceWrap.appendChild(confidenceInput);
@@ -2734,6 +2803,9 @@ function buildFilterBar() {
       renderFeed(false);
     });
   }
+
+  bindFeedFilterOutsideClickOnce();
+  feedFilterBarInitialized = true;
 }
 
 function renderFilterChips() {
@@ -2774,7 +2846,8 @@ function updateActiveFilterChips() {
   const hasCategory = filterState.categories.size > 0;
   const hasMinConf = filterState.minConfidence > 0;
   const hasDomain = filterState.domainSearch.trim() !== '';
-  const hasAny = hasCategory || hasMinConf || hasDomain;
+  const hasTab = filterState.tabFilter === 'current' && currentTabId != null;
+  const hasAny = hasCategory || hasMinConf || hasDomain || hasTab;
 
   container.textContent = '';
   row.hidden = !hasAny;
@@ -2819,6 +2892,28 @@ function updateActiveFilterChips() {
       if (el) el.value = '';
       updateActiveFilterChips();
       renderFeed(false);
+    });
+    container.appendChild(chip);
+  }
+  if (hasTab) {
+    const tabLabelEl = document.getElementById('feed-tab-trigger-label');
+    let label = 'Current tab';
+    if (tabLabelEl) {
+      const t = (tabLabelEl.textContent || '').replace(/^Tab:\s*/i, '').trim();
+      if (t && t !== 'All tabs') label = t.length > 18 ? t.slice(0, 17) + '…' : t;
+    }
+    const chip = document.createElement('span');
+    chip.className = 'feed-active-chip';
+    chip.innerHTML =
+      '<span class="feed-active-chip-label">tab: ' + escapeAttr(label) + '</span><button type="button" class="feed-active-chip-remove" aria-label="Remove filter">×</button>';
+    chip.querySelector('.feed-active-chip-remove').addEventListener('click', () => {
+      filterState.tabFilter = 'all';
+      currentTabId = null;
+      const el = document.getElementById('feed-tab-trigger-label');
+      if (el) el.textContent = 'Tab: All tabs';
+      updateActiveFilterChips();
+      renderFeed(false);
+      scheduleBottomPanelRefresh();
     });
     container.appendChild(chip);
   }
@@ -3016,44 +3111,60 @@ function init() {
   });
 
   chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (data) => {
-    const session = data['session:current'];
-    hideSessionConfirmBar();
-    if (session && session.active) {
-      currentSession = { id: session.id, active: true };
-      sessionStartTime = session.started_at;
-      const paused = !!data['session:paused'];
-      if (paused) {
-        feedPaused = true;
-        frozenElapsedSeconds = Math.max(0, Number(data['session:elapsed_frozen']) || 0);
-        const overlay = document.getElementById('feed-pause-overlay');
-        if (overlay) overlay.hidden = false;
-      } else {
-        feedPaused = false;
-        frozenElapsedSeconds = 0;
-        startSessionTimer();
-      }
-      updateFeedHeaderDot();
-      updateStatus('Recording');
-      updateSessionButton(true);
-      updatePauseButton();
-      updateTimerDisplay();
-      chrome.storage.local.get(['requests:' + session.id, 'scores:' + session.id], (res) => {
-        const loaded = res['requests:' + session.id];
-        if (Array.isArray(loaded) && loaded.length > 0) {
-          feedRequests = loaded;
-          requestCount = feedRequests.length;
-          updateStatus('Requests: ' + requestCount);
-          renderFeed(false);
+    if (chrome.runtime.lastError) {
+      console.warn('[Specter] session restore:', chrome.runtime.lastError.message);
+      return;
+    }
+    try {
+      const session = data['session:current'];
+      hideSessionConfirmBar();
+      if (session && session.active) {
+        currentSession = { id: session.id, active: true };
+        sessionStartTime = session.started_at || Date.now();
+        const paused = !!data['session:paused'];
+        if (paused) {
+          feedPaused = true;
+          frozenElapsedSeconds = Math.max(0, Number(data['session:elapsed_frozen']) || 0);
+          const overlay = document.getElementById('feed-pause-overlay');
+          if (overlay) overlay.hidden = false;
+        } else {
+          feedPaused = false;
+          frozenElapsedSeconds = 0;
+          startSessionTimer();
         }
-        siteScores = res['scores:' + session.id] || {};
+        updateFeedHeaderDot();
+        updateStatus('Recording');
+        updateSessionButton(true);
+        updatePauseButton();
+        updateTimerDisplay();
+        chrome.storage.local.get(['requests:' + session.id, 'scores:' + session.id], (res) => {
+          if (chrome.runtime.lastError) {
+            console.warn('[Specter] request restore:', chrome.runtime.lastError.message);
+            return;
+          }
+          try {
+            const loaded = res['requests:' + session.id];
+            if (Array.isArray(loaded) && loaded.length > 0) {
+              feedRequests = loaded;
+              requestCount = feedRequests.length;
+              updateStatus('Requests: ' + requestCount);
+              renderFeed(false);
+            }
+            siteScores = res['scores:' + session.id] || {};
+            refreshSiteSummary();
+            requestAnimationFrame(() => requestAnimationFrame(() => scheduleTimelineRender()));
+          } catch (err) {
+            console.error('[Specter] session data restore failed:', err);
+          }
+        });
+      } else {
+        siteScores = {};
+        currentSiteDomain = null;
         refreshSiteSummary();
         requestAnimationFrame(() => requestAnimationFrame(() => scheduleTimelineRender()));
-      });
-    } else {
-      siteScores = {};
-      currentSiteDomain = null;
-      refreshSiteSummary();
-      requestAnimationFrame(() => requestAnimationFrame(() => scheduleTimelineRender()));
+      }
+    } catch (err) {
+      console.error('[Specter] session restore failed:', err);
     }
   });
 
@@ -3098,8 +3209,9 @@ function init() {
     Object.assign(settings, data.settings || {});
     const confidenceInput = document.getElementById('feed-min-confidence');
     if (confidenceInput && settings.min_confidence != null) {
-      filterState.minConfidence = Math.max(0, Math.min(100, Number(settings.min_confidence) || 0));
+      filterState.minConfidence = normalizeMinConfidencePct(settings.min_confidence);
       confidenceInput.value = String(filterState.minConfidence);
+      if (feedFilterBarInitialized) updateActiveFilterChips();
     }
   });
 

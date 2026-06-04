@@ -4562,6 +4562,7 @@ body,
 .feed-row.feed-row--selected {
   background: color-mix(in srgb, var(--accent) 5%, var(--bg-elevated));
   border-left: 2px solid var(--accent);
+  padding-left: calc(var(--space-3) - 2px);
 }
 /* Category badges — slightly larger, more readable */
 .feed-badge {
