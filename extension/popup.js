@@ -156,14 +156,16 @@ function refreshUI() {
         scoreEl.className = 'popup-score-number';
         trackerEl.textContent = '—';
         trackerEl.classList.remove('popup-tracker-count--scanning');
-        if (blockingEl) blockingEl.hidden = true;
+        chrome.storage.local.get(['blocking:daily', 'settings'], (res) => {
+          renderBlockingCount(res.settings, res['blocking:daily']);
+        });
         return;
       }
 
       chrome.storage.local.get(
-        ['scores:' + session.id, 'blocking:stats:' + session.id, 'settings'],
+        ['scores:' + session.id, 'blocking:daily', 'settings'],
         (res) => {
-        renderBlockingCount(res['blocking:stats:' + session.id], res.settings);
+        renderBlockingCount(res.settings, res['blocking:daily']);
         const scores = res['scores:' + session.id] || {};
         const entry  = currentDomain ? scores[currentDomain] : null;
 
@@ -185,16 +187,19 @@ function refreshUI() {
   });
 }
 
-function renderBlockingCount(stats, settings) {
+function renderBlockingCount(settings, daily) {
   if (!blockingEl) return;
   const enabled = !!settings?.blocking_enabled;
-  const blocked = stats?.blocked || 0;
-  if (!enabled || blocked === 0) {
+  const today = new Date().toISOString().slice(0, 10);
+  const blockedToday = daily?.date === today ? (daily.blocked || 0) : 0;
+  if (!enabled || blockedToday === 0) {
     blockingEl.hidden = true;
     blockingEl.textContent = '';
     return;
   }
-  blockingEl.textContent = blocked + ' blocked';
+  const label = blockedToday === 1 ? '1 blocked today' : blockedToday + ' blocked today';
+  blockingEl.textContent = label;
+  blockingEl.title = 'Blocking is on — domains blocked today across sessions';
   blockingEl.hidden = false;
 }
 
@@ -245,7 +250,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   const relevant = ['session:current', 'session:paused', 'session:elapsed_frozen', 'settings'];
   const hasScoreChange = currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:'));
-  const hasBlockingStats = Object.keys(changes).some((k) => k.startsWith('blocking:stats:'));
+  const hasBlockingStats =
+    'blocking:daily' in changes || Object.keys(changes).some((k) => k.startsWith('blocking:stats:'));
   if (relevant.some((k) => k in changes) || hasScoreChange || hasBlockingStats) refreshUI();
 });
 

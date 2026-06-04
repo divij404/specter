@@ -5,6 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.1] — 2026-06-04
+
+### Added
+- Popup shows **N blocked today** when blocking is enabled (`blocking:daily` aggregate)
+- DNR cleanup rules for trailing `?` and `?&` after param-only strips
+
+### Fixed
+- Site summary no longer hides score and KPIs when tracker count is zero (clean sites show full panel)
+- Allow-list modal no longer stacks duplicate click handlers on reopen
+- Param strip leaving `https://example.com?` when the only query param is removed
+
+### Changed
+- Settings overlay: 3-column layout (Feed/Classifier · Blocking/FP defense · Integrations)
+- Bottom panel: Timeline / Fingerprinting tabs instead of chevron toggle
+- Bottom panel card styling aligned with Site Summary; donut center labeled **requests**
+- Feed **Clear all** button muted by default; confidence column dimmed when all values match
+- Dashboard settings nav icon changed to sliders (no longer reads as brightness)
+
 ## [1.3.0] — 2026-06-04
 
 ### Added

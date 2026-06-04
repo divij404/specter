@@ -216,6 +216,7 @@ Optional VirusTotal lookups are disabled by default and require a user-provided 
 | `blocking:dynamic_domains`   | Domains promoted to DNR block rules        |
 | `blocking:allowlist`         | Per-site domain overrides                  |
 | `blocking:stats:{session_id}`| Blocked/stripped counts per session        |
+| `blocking:daily`             | Calendar-day blocked count for the popup   |
 | `fp:session_seed` (session storage) | PRNG seed for fingerprint defense while a session is active |
 
 ---

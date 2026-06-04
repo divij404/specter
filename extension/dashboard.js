@@ -221,6 +221,24 @@ function animatePrivacyScore(element, fromVal, toVal, durationMs) {
   requestAnimationFrame(tick);
 }
 
+function siteSummaryEmptyStateHtml(title, hint) {
+  return (
+    '<div class="site-summary-empty-state">' +
+    '<svg class="site-summary-empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
+    '<circle cx="20" cy="20" r="4"/>' +
+    '<circle cx="20" cy="20" r="10" stroke-dasharray="3 3" opacity="0.5"/>' +
+    '<circle cx="20" cy="20" r="16" stroke-dasharray="3 3" opacity="0.25"/>' +
+    '</svg>' +
+    '<span class="site-summary-empty-title">' +
+    escapeAttr(title) +
+    '</span>' +
+    '<span class="site-summary-empty-hint">' +
+    escapeAttr(hint) +
+    '</span>' +
+    '</div>'
+  );
+}
+
 function renderSiteSummary() {
   const isAllSitesScope = summarySelectedDomain === SUMMARY_SCOPE_ALL_SITES;
 
@@ -246,32 +264,20 @@ function renderSiteSummary() {
     const scopeRequests = applyFilters(feedRequests);
     if (scopeRequests.length === 0 && Object.keys(siteScores).length === 0) {
       root.className = 'site-summary-layout site-summary-layout--empty';
-      root.innerHTML =
-        '<div class="site-summary-empty-state">' +
-        '<svg class="site-summary-empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
-        '<circle cx="20" cy="20" r="4"/>' +
-        '<circle cx="20" cy="20" r="10" stroke-dasharray="3 3" opacity="0.5"/>' +
-        '<circle cx="20" cy="20" r="16" stroke-dasharray="3 3" opacity="0.25"/>' +
-        '</svg>' +
-        '<span class="site-summary-empty-title">No session data</span>' +
-        '<span class="site-summary-empty-hint">Click ▶ NEW SESSION above or start one from the popup, then browse.</span>' +
-        '</div>';
+      root.innerHTML = siteSummaryEmptyStateHtml(
+        'No session data',
+        'Click ▶ NEW SESSION above or start one from the popup, then browse.'
+      );
       renderFingerprintingAlerts();
       scheduleTimelineRender();
       return;
     }
   } else if (!currentSiteDomain || !siteScores[currentSiteDomain]) {
     root.className = 'site-summary-layout site-summary-layout--empty';
-    root.innerHTML =
-      '<div class="site-summary-empty-state">' +
-      '<svg class="site-summary-empty-icon" viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
-      '<circle cx="20" cy="20" r="4"/>' +
-      '<circle cx="20" cy="20" r="10" stroke-dasharray="3 3" opacity="0.5"/>' +
-      '<circle cx="20" cy="20" r="16" stroke-dasharray="3 3" opacity="0.25"/>' +
-      '</svg>' +
-      '<span class="site-summary-empty-title">No data for this site</span>' +
-      '<span class="site-summary-empty-hint">Visit this site during an active session to see its tracker summary.</span>' +
-      '</div>';
+    root.innerHTML = siteSummaryEmptyStateHtml(
+      'No data for this site',
+      'Visit this site during an active session to see its tracker summary.'
+    );
     renderFingerprintingAlerts();
     scheduleTimelineRender();
     return;
@@ -455,7 +461,7 @@ function renderSiteSummary() {
   if (worstOffenders.length === 0) {
     const li = document.createElement('li');
     li.className = 'site-summary-worst-item site-summary-worst-empty';
-    li.textContent = 'None';
+    li.textContent = uniqueTrackers === 0 ? 'No trackers detected' : 'None';
     worstList.appendChild(li);
   }
   worstWrap.appendChild(worstList);
@@ -585,14 +591,22 @@ function renderDoughnut(containerOrSelector, dataByCategory) {
     g.appendChild(path);
   }
   svg.appendChild(g);
-  const centerText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  centerText.setAttribute('x', 0);
-  centerText.setAttribute('y', 0);
-  centerText.setAttribute('text-anchor', 'middle');
-  centerText.setAttribute('dominant-baseline', 'middle');
-  centerText.setAttribute('class', 'site-summary-doughnut-center');
-  centerText.textContent = String(total);
-  g.appendChild(centerText);
+  const centerNum = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  centerNum.setAttribute('x', 0);
+  centerNum.setAttribute('y', -3);
+  centerNum.setAttribute('text-anchor', 'middle');
+  centerNum.setAttribute('dominant-baseline', 'middle');
+  centerNum.setAttribute('class', 'site-summary-doughnut-center');
+  centerNum.textContent = String(total);
+  g.appendChild(centerNum);
+  const centerLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  centerLabel.setAttribute('x', 0);
+  centerLabel.setAttribute('y', 11);
+  centerLabel.setAttribute('text-anchor', 'middle');
+  centerLabel.setAttribute('dominant-baseline', 'middle');
+  centerLabel.setAttribute('class', 'site-summary-doughnut-center-label');
+  centerLabel.textContent = 'requests';
+  g.appendChild(centerLabel);
   container.appendChild(svg);
   const legend = document.createElement('div');
   legend.className = 'site-summary-doughnut-legend';
@@ -751,9 +765,17 @@ function renderFingerprintingAlerts() {
     const empty = document.createElement('div');
     empty.className = 'fingerprint-panel-empty';
     empty.innerHTML =
-      '<svg class="fingerprint-panel-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
-      '<path stroke-linecap="round" stroke-linejoin="round" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>' +
-      '<path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01" />' +
+      '<svg class="fingerprint-panel-empty-icon" viewBox="0 0 80 100" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">' +
+      '<path d="M10 48 C10 12 70 12 70 48 L70 76 C58 76 58 88 45 88 C34 88 34 76 28 76 C22 76 22 88 12 88 C8 88 10 76 10 76 Z"/>' +
+      '<ellipse cx="28" cy="42" rx="5.5" ry="7" fill="currentColor" opacity="0.5"/>' +
+      '<circle cx="52" cy="42" r="12"/>' +
+      '<circle cx="52" cy="42" r="7" opacity="0.5"/>' +
+      '<circle cx="52" cy="42" r="3.5" fill="currentColor"/>' +
+      '<line x1="52" y1="30" x2="52" y2="33" opacity="0.4"/>' +
+      '<line x1="52" y1="51" x2="52" y2="54" opacity="0.4"/>' +
+      '<line x1="40" y1="42" x2="43" y2="42" opacity="0.4"/>' +
+      '<line x1="61" y1="42" x2="64" y2="42" opacity="0.4"/>' +
+      '<path d="M22 64 Q34 74 46 68" stroke-width="2"/>' +
       '</svg>' +
       '<span class="fingerprint-panel-empty-title">No fingerprinting data</span>' +
       '<span class="fingerprint-panel-empty-hint">Start a session and browse to detect fingerprinting signals.</span>';
@@ -879,22 +901,23 @@ function buildFingerprintSignalRow(label, ok, domain) {
 /** When true, bottom zone shows fingerprinting panel (timeline hidden). */
 let fingerprintDrawerOpen = false;
 
-function updateBottomViewToggleLabel() {
-  const btn = document.getElementById('bottom-view-toggle');
-  const toolbarTitle = document.getElementById('dashboard-bottom-toolbar-title');
-  if (btn) {
-    btn.textContent = fingerprintDrawerOpen ? '\u25bc CLOSE' : '\u25b2 FINGERPRINTING';
-    btn.setAttribute('aria-expanded', fingerprintDrawerOpen ? 'true' : 'false');
-    btn.classList.toggle('bottom-view-toggle--active', fingerprintDrawerOpen);
+function updateBottomPanelTabs() {
+  const tabTimeline = document.getElementById('bottom-tab-timeline');
+  const tabFp = document.getElementById('bottom-tab-fingerprinting');
+  const onFp = fingerprintDrawerOpen;
+  if (tabTimeline) {
+    tabTimeline.classList.toggle('bottom-panel-tab--active', !onFp);
+    tabTimeline.setAttribute('aria-selected', onFp ? 'false' : 'true');
   }
-  if (toolbarTitle) {
-    toolbarTitle.textContent = fingerprintDrawerOpen ? 'FINGERPRINTING' : 'TIMELINE';
+  if (tabFp) {
+    tabFp.classList.toggle('bottom-panel-tab--active', onFp);
+    tabFp.setAttribute('aria-selected', onFp ? 'true' : 'false');
   }
 }
 
 function setFingerprintDrawerOpen(open) {
   fingerprintDrawerOpen = !!open;
-  updateBottomViewToggleLabel();
+  updateBottomPanelTabs();
   const stack = document.getElementById('dashboard-bottom-stack');
   const drawer = document.getElementById('fingerprint-drawer');
   const tlLayer = document.getElementById('dashboard-timeline-layer');
@@ -913,30 +936,18 @@ function setFingerprintDrawerOpen(open) {
 }
 
 function setupFingerprintDrawer() {
-  const toggle = document.getElementById('bottom-view-toggle');
-  const closeBtn = document.getElementById('fingerprint-drawer-close');
-  if (toggle) {
-    toggle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const next = !fingerprintDrawerOpen;
-      fingerprintDrawerOpen = next;
-      updateBottomViewToggleLabel();
-      const stack = document.getElementById('dashboard-bottom-stack');
-      const drawer = document.getElementById('fingerprint-drawer');
-      const tlLayer = document.getElementById('dashboard-timeline-layer');
-      if (stack) stack.setAttribute('data-view', next ? 'fingerprint' : 'timeline');
-      if (drawer) drawer.setAttribute('aria-hidden', next ? 'false' : 'true');
-      if (tlLayer) tlLayer.setAttribute('aria-hidden', next ? 'true' : 'false');
-      if (next) {
-        updateFingerprintDrawerHeaderSite();
-        renderFingerprintingAlerts();
-      }
-      requestAnimationFrame(() => scheduleTimelineRender());
-    });
-  }
-  if (closeBtn) {
-    closeBtn.addEventListener('click', () => setFingerprintDrawerOpen(false));
-  }
+  document.getElementById('bottom-tab-timeline')?.addEventListener('click', () => {
+    if (!fingerprintDrawerOpen) return;
+    setFingerprintDrawerOpen(false);
+  });
+  document.getElementById('bottom-tab-fingerprinting')?.addEventListener('click', () => {
+    if (fingerprintDrawerOpen) return;
+    setFingerprintDrawerOpen(true);
+  });
+  document.getElementById('fingerprint-drawer-close')?.addEventListener('click', () => {
+    setFingerprintDrawerOpen(false);
+  });
+  updateBottomPanelTabs();
 }
 
 function buildSiteSummaryDropdown(container) {
@@ -1594,6 +1605,19 @@ function renderFeedRows(filtered, animateLast) {
   } else {
     itemsToRender = filtered.slice().reverse().slice(0, FEED_CAP);
   }
+
+  const confPcts = new Set();
+  for (const item of itemsToRender) {
+    const reqs = collapse && item.requests ? item.requests : [collapse && item.requests ? item.requests[0] : item];
+    for (const r of reqs) {
+      confPcts.add(Math.round((r.confidence ?? 0) * 100));
+    }
+  }
+  const tableWrap = list.closest('.feed-table-wrap');
+  if (tableWrap) {
+    tableWrap.classList.toggle('feed-table-wrap--uniform-conf', confPcts.size <= 1 && itemsToRender.length > 0);
+  }
+
   const fragment = document.createDocumentFragment();
   itemsToRender.forEach((item, i) => {
     const isGroup = collapse && item.requests;
@@ -2848,7 +2872,7 @@ function init() {
   updateStatus('Stopped');
   updateSessionButton(false);
   initTimelineResizeObserver();
-  updateBottomViewToggleLabel();
+  updateBottomPanelTabs();
   renderFeed(false);
   requestAnimationFrame(() => {
     requestAnimationFrame(() => scheduleTimelineRender());
@@ -3483,6 +3507,7 @@ async function renderSettingsOverlay() {
     : 'ML (XGBoost) · not yet loaded';
 
   body.innerHTML = `
+    <div class="settings-column settings-column--observe">
     <div class="settings-section">
       <div class="settings-section-header"><span class="settings-section-title">FEED</span></div>
 
@@ -3521,6 +3546,32 @@ async function renderSettingsOverlay() {
     </div>
 
     <div class="settings-section">
+      <div class="settings-section-header"><span class="settings-section-title">CLASSIFIER</span></div>
+
+      <div class="settings-row">
+        <div class="settings-row-label">
+          <div class="settings-row-title">Use ML classifier</div>
+          <div class="settings-row-hint">XGBoost model for request classification. Disable to use rule-based only.</div>
+        </div>
+        <label class="settings-toggle" aria-label="Use ML classifier">
+          <input type="checkbox" id="setting-use-ml"${s.use_ml_classifier ? ' checked' : ''}>
+          <span class="settings-toggle-track"></span>
+        </label>
+      </div>
+
+      <div class="settings-row settings-row--info">
+        <div class="settings-row-label">
+          <div class="settings-row-title">Active classifier</div>
+          <div class="settings-row-hint" id="setting-classifier-info">${s.use_ml_classifier ? modelStatus : 'Rule-based (weighted multi-signal scorer)'}</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="settings-column settings-column--privacy" id="settings-column-privacy"></div>
+
+    <div class="settings-column settings-column--integrations">
+    <div class="settings-section">
       <div class="settings-section-header"><span class="settings-section-title">INTEGRATIONS</span></div>
 
       <div class="settings-row">
@@ -3558,27 +3609,6 @@ async function renderSettingsOverlay() {
         </div>
       </div>
     </div>
-
-    <div class="settings-section">
-      <div class="settings-section-header"><span class="settings-section-title">CLASSIFIER</span></div>
-
-      <div class="settings-row">
-        <div class="settings-row-label">
-          <div class="settings-row-title">Use ML classifier</div>
-          <div class="settings-row-hint">XGBoost model for request classification. Disable to use rule-based only.</div>
-        </div>
-        <label class="settings-toggle" aria-label="Use ML classifier">
-          <input type="checkbox" id="setting-use-ml"${s.use_ml_classifier ? ' checked' : ''}>
-          <span class="settings-toggle-track"></span>
-        </label>
-      </div>
-
-      <div class="settings-row settings-row--info">
-        <div class="settings-row-label">
-          <div class="settings-row-title">Active classifier</div>
-          <div class="settings-row-hint" id="setting-classifier-info">${s.use_ml_classifier ? modelStatus : 'Rule-based (weighted multi-signal scorer)'}</div>
-        </div>
-      </div>
     </div>
 
     <div class="settings-danger-zone">
@@ -3592,24 +3622,18 @@ async function renderSettingsOverlay() {
       </div>
     </div>`;
 
-  // ── Blocking + fingerprint defense sections — before danger zone ───────
-  const dangerZone = body.querySelector('.settings-danger-zone');
-  if (typeof renderBlockingSettingsSection === 'function') {
-    const blockingSection = document.createElement('div');
-    blockingSection.innerHTML = renderBlockingSettingsSection(s);
-    if (dangerZone) {
-      dangerZone.parentNode.insertBefore(blockingSection.firstElementChild, dangerZone);
-    } else {
-      body.appendChild(blockingSection.firstElementChild);
+  // ── Privacy column: blocking + fingerprint defense ─────────────────────
+  const privacyCol = document.getElementById('settings-column-privacy');
+  if (privacyCol) {
+    if (typeof renderBlockingSettingsSection === 'function') {
+      const blockingSection = document.createElement('div');
+      blockingSection.innerHTML = renderBlockingSettingsSection(s);
+      privacyCol.appendChild(blockingSection.firstElementChild);
     }
-  }
-  if (typeof renderFpDefenseSettingsSection === 'function') {
-    const fpSection = document.createElement('div');
-    fpSection.innerHTML = renderFpDefenseSettingsSection(s);
-    if (dangerZone) {
-      dangerZone.parentNode.insertBefore(fpSection.firstElementChild, dangerZone);
-    } else {
-      body.appendChild(fpSection.firstElementChild);
+    if (typeof renderFpDefenseSettingsSection === 'function') {
+      const fpSection = document.createElement('div');
+      fpSection.innerHTML = renderFpDefenseSettingsSection(s);
+      privacyCol.appendChild(fpSection.firstElementChild);
     }
   }
 

@@ -13,15 +13,20 @@
     <span class="dashboard-logo">SPECTER</span>
     <span class="dashboard-nav-spacer"></span>
     <button type="button" class="nav-icon-btn" id="history-nav-btn" aria-label="Session history" title="Session History">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="8" cy="8" r="6"/>
-        <polyline points="8,5 8,8 10.5,10.5"/>
+      <!-- Lucide: clock-rewind (history) -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+        <path d="M12 7v5l4 2"/>
       </svg>
     </button>
     <button type="button" class="nav-icon-btn" id="settings-nav-btn" aria-label="Settings" title="Settings">
-      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="8" cy="8" r="2"/>
-        <path d="M8 1.5V3M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06"/>
+      <!-- Lucide: settings-2 -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 7h-9"/>
+        <path d="M14 17H5"/>
+        <circle cx="17" cy="17" r="3"/>
+        <circle cx="7" cy="7" r="3"/>
       </svg>
     </button>
   </header>
@@ -58,10 +63,22 @@
               <div class="feed-new-pill" id="feed-new-pill" hidden>↑ <span id="feed-new-pill-count">0</span> new</div>
               <div class="feed-rows" id="feed-list"></div>
               <div class="feed-empty" id="feed-empty">
-                <svg class="feed-empty-ghost" viewBox="0 0 32 40" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M16 4C9.4 4 4 9.4 4 16v16l4-4 4 4 4-4 4 4V16c0-6.6-5.4-12-12-12z"/>
-                  <ellipse cx="11" cy="14" rx="2" ry="2.5" fill="currentColor"/>
-                  <ellipse cx="21" cy="14" rx="2" ry="2.5" fill="currentColor"/>
+                <svg class="feed-empty-ghost" viewBox="0 0 80 100" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
+                  <!-- body: dome top, three scallop bumps at base -->
+                  <path d="M10 48 C10 12 70 12 70 48 L70 76 C58 76 58 88 45 88 C34 88 34 76 28 76 C22 76 22 88 12 88 C8 88 10 76 10 76 Z"/>
+                  <!-- left eye: soft ellipse -->
+                  <ellipse cx="28" cy="42" rx="5.5" ry="7" fill="currentColor" opacity="0.5"/>
+                  <!-- right eye: camera lens rings -->
+                  <circle cx="52" cy="42" r="12"/>
+                  <circle cx="52" cy="42" r="7" opacity="0.5"/>
+                  <circle cx="52" cy="42" r="3.5" fill="currentColor"/>
+                  <!-- aperture ticks -->
+                  <line x1="52" y1="30" x2="52" y2="33" opacity="0.4"/>
+                  <line x1="52" y1="51" x2="52" y2="54" opacity="0.4"/>
+                  <line x1="40" y1="42" x2="43" y2="42" opacity="0.4"/>
+                  <line x1="61" y1="42" x2="64" y2="42" opacity="0.4"/>
+                  <!-- smirk -->
+                  <path d="M22 64 Q34 74 46 68" stroke-width="2"/>
                 </svg>
                 <span class="feed-empty-text" id="feed-empty-text">Start a session from the Specter popup to begin capturing requests.</span>
               </div>
@@ -83,19 +100,26 @@
           <div class="panel-content"><div id="site-summary-root"></div></div>
         </section>
       </div>
-      <div class="dashboard-bottom-panel">
+      <div class="dashboard-bottom-panel panel">
         <div class="dashboard-bottom-toolbar">
-          <span id="dashboard-bottom-toolbar-title" class="dashboard-bottom-toolbar-title">TIMELINE</span>
-          <span class="dashboard-bottom-toolbar-spacer" aria-hidden="true"></span>
-          <button
-            type="button"
-            class="bottom-view-toggle"
-            id="bottom-view-toggle"
-            aria-expanded="false"
-            aria-controls="fingerprint-drawer"
-          >
-            ▲ FINGERPRINTING
-          </button>
+          <div class="bottom-panel-tabs" role="tablist" aria-label="Activity panel">
+            <button
+              type="button"
+              role="tab"
+              id="bottom-tab-timeline"
+              class="bottom-panel-tab bottom-panel-tab--active"
+              aria-selected="true"
+              aria-controls="dashboard-timeline-layer"
+            >Timeline</button>
+            <button
+              type="button"
+              role="tab"
+              id="bottom-tab-fingerprinting"
+              class="bottom-panel-tab"
+              aria-selected="false"
+              aria-controls="fingerprint-drawer"
+            >Fingerprinting</button>
+          </div>
         </div>
         <div id="dashboard-bottom-stack" class="dashboard-bottom-stack" data-view="timeline">
         <div

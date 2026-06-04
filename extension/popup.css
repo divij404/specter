@@ -185,9 +185,12 @@ body {
 }
 
 .popup-blocking-count {
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 500;
-  color: var(--status-error);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 .popup-tracker-count {

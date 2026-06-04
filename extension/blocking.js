@@ -267,7 +267,8 @@ function buildParamStripRules() {
         // Group 1: everything up to and including the separator before this param (? or &)
         // Group 2: everything after param=value and its trailing &
         // The trailing & is consumed by [^&]*&? so \\1\\2 reconnects cleanly.
-        // Edge: if param is last, trailing & is absent, group 2 is empty → no dangling &
+        // If this param is the only query key, group 2 is empty and \\1\\2 leaves a dangling ?;
+        // buildParamStripCleanupRules() removes trailing ?, ?&, and & via follow-up redirects.
         regexFilter: `^(.*[?&])${escaped}=[^&]*&?(.*)$`,
         resourceTypes: DNR_STRIP_RESOURCE_TYPES,
         // Only strip from non-allowlisted requests — we can't reference the
@@ -281,7 +282,7 @@ function buildParamStripRules() {
 /**
  * Cleanup redirects for query-string artifacts left by param-strip rules.
  * Lower priority than strip rules so tracking params are removed first; Chrome
- * re-evaluates rules after each redirect, so ?& / && / trailing & get fixed next.
+ * re-evaluates rules after each redirect, so ?& / && / trailing & / lone ? get fixed next.
  */
 function buildParamStripCleanupRules() {
   if (!blockingEnabled || blockingMode === 'strict') return [];
@@ -305,6 +306,19 @@ function buildParamStripCleanupRules() {
       priority: 1,
       action: { type: 'redirect', redirect: { regexSubstitution: '\\1' } },
       condition: { ...cond, regexFilter: '^(.*)&$' },
+    },
+    // Lone ? after stripping the only query param (e.g. example.com?utm_source=x → example.com?)
+    {
+      id: DNR_STRIP_CLEANUP_OFFSET + 3,
+      priority: 1,
+      action: { type: 'redirect', redirect: { regexSubstitution: '\\1' } },
+      condition: { ...cond, regexFilter: '^(.*)\\?$' },
+    },
+    {
+      id: DNR_STRIP_CLEANUP_OFFSET + 4,
+      priority: 1,
+      action: { type: 'redirect', redirect: { regexSubstitution: '\\1' } },
+      condition: { ...cond, regexFilter: '^(.*)\\?&$' },
     },
   ];
 }
@@ -361,6 +375,21 @@ async function rebuildDNRRules() {
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
+function blockingStatsDateKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function incrementDailyBlockStat(field) {
+  const today = blockingStatsDateKey();
+  const r = await chrome.storage.local.get('blocking:daily');
+  let daily = r['blocking:daily'];
+  if (!daily || daily.date !== today) {
+    daily = { date: today, blocked: 0, stripped: 0, warned: 0 };
+  }
+  daily[field] = (daily[field] || 0) + 1;
+  await chrome.storage.local.set({ 'blocking:daily': daily });
+}
+
 async function incrementBlockStat(sessionId, field) {
   if (!sessionId) return;
   const key = 'blocking:stats:' + sessionId;
@@ -370,6 +399,7 @@ async function incrementBlockStat(sessionId, field) {
   }
   const stats = blockStatsCache.get(sessionId);
   stats[field] = (stats[field] || 0) + 1;
+  if (field === 'blocked') await incrementDailyBlockStat('blocked');
   if ((stats.blocked + stats.stripped + stats.warned) % 20 === 0) {
     await chrome.storage.local.set({ [key]: stats });
   }

@@ -418,14 +418,48 @@ function bindBlockingSettingsEvents(saveSettingFieldFn) {
   });
 }
 
-function showAllowlistModal(entries) {
+function hideAllowlistModal() {
+  const modal = document.getElementById('allowlist-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function ensureAllowlistModal() {
   let modal = document.getElementById('allowlist-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'allowlist-modal';
-    modal.className = 'specter-modal-overlay';
-    document.body.appendChild(modal);
-  }
+  if (modal) return modal;
+
+  modal = document.createElement('div');
+  modal.id = 'allowlist-modal';
+  modal.className = 'specter-modal-overlay';
+  document.body.appendChild(modal);
+
+  modal.addEventListener('click', async (e) => {
+    if (e.target === modal) {
+      hideAllowlistModal();
+      return;
+    }
+    if (e.target.closest('#allowlist-close')) {
+      hideAllowlistModal();
+      return;
+    }
+    const btn = e.target.closest('.allowlist-remove-btn');
+    if (!btn) return;
+
+    const entry = btn.dataset.entry;
+    const r = await new Promise((res) => chrome.storage.local.get('blocking:allowlist', res));
+    const updated = (r['blocking:allowlist'] || []).filter((ent) => ent !== entry);
+    await new Promise((res) => chrome.storage.local.set({ 'blocking:allowlist': updated }, res));
+    chrome.runtime.sendMessage({ type: 'rebuild_dnr_rules' });
+    btn.closest('tr')?.remove();
+    if (!modal.querySelector('.allowlist-table tbody tr')) {
+      modal.querySelector('.specter-modal-body').innerHTML = renderAllowlistModalContent([]);
+    }
+  });
+
+  return modal;
+}
+
+function showAllowlistModal(entries) {
+  const modal = ensureAllowlistModal();
 
   modal.innerHTML = `
 <div class="specter-modal">
@@ -443,23 +477,6 @@ function showAllowlistModal(entries) {
 </div>`;
 
   modal.style.display = 'flex';
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
-  document.getElementById('allowlist-close')?.addEventListener('click', () => { modal.style.display = 'none'; });
-
-  modal.querySelectorAll('.allowlist-remove-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const entry = btn.dataset.entry;
-      const r = await new Promise(res => chrome.storage.local.get('blocking:allowlist', res));
-      const updated = (r['blocking:allowlist'] || []).filter(e => e !== entry);
-      await new Promise(res => chrome.storage.local.set({ 'blocking:allowlist': updated }, res));
-      chrome.runtime.sendMessage({ type: 'rebuild_dnr_rules' });
-      btn.closest('tr')?.remove();
-      // If table is now empty, swap to empty state
-      if (!modal.querySelector('.allowlist-table tbody tr')) {
-        modal.querySelector('.specter-modal-body').innerHTML = renderAllowlistModalContent([]);
-      }
-    });
-  });
 }
 
 // ── Request detail panel: "Allow on this site" buttons ────────────────────────
