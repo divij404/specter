@@ -16,6 +16,20 @@ function categoryToBadgeClass(cat) {
   return 'feed-badge--' + (k === 'fingerprinting' ? 'fingerprint' : k);
 }
 
+/** Left-border accent on feed rows (trackers only). */
+function categoryToRowAccentClass(cat) {
+  if (!cat || cat === 'legitimate' || cat === 'unclassified') return '';
+  return ' feed-row--accent-' + (cat === 'fingerprinting' ? 'fingerprint' : cat.replace(/_/g, '-'));
+}
+
+const FEED_EXPAND_ICON =
+  '<svg class="feed-row-expand-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>';
+
+function feedSizeCellClass(totalBytes) {
+  if (totalBytes >= 100 * 1024) return ' feed-cell-size--large';
+  return '';
+}
+
 function categoryLabel(cat) {
   if (!cat) return 'Unclassified';
   return cat
@@ -1641,7 +1655,12 @@ function renderFeedRows(filtered, animateLast) {
     const conf = (req.confidence ?? 0);
     const confClass = conf >= 0.8 ? ' feed-row--high-conf' : conf < 0.35 ? ' feed-row--low-conf' : '';
     const row = document.createElement('div');
-    row.className = 'feed-row' + (g.id === selectedRequestId ? ' feed-row--selected' : '') + confClass + (isNew ? ' feed-row-enter' : '');
+    row.className =
+      'feed-row' +
+      (g.id === selectedRequestId ? ' feed-row--selected' : '') +
+      confClass +
+      categoryToRowAccentClass(req.category) +
+      (isNew ? ' feed-row-enter' : '');
     row.setAttribute('data-request-id', g.id);
     row.setAttribute('role', 'button');
     row.setAttribute('tabindex', '0');
@@ -1653,10 +1672,11 @@ function renderFeedRows(filtered, animateLast) {
     const prevCount = lastGroupCounts.get(key) || 0;
     /* Size: single value or sum for collapsed group; show KB or MB */
     let sizeStr = '—';
+    let totalBytes = 0;
     if (g.requests.length > 0) {
       const sizes = g.requests.map((x) => x.response_size_bytes).filter((x) => x != null);
       if (sizes.length > 0) {
-        const totalBytes = sizes.reduce((a, b) => a + b, 0);
+        totalBytes = sizes.reduce((a, b) => a + b, 0);
         if (totalBytes >= 1024 * 1024) {
           sizeStr = (totalBytes / (1024 * 1024)).toFixed(1) + ' MB';
         } else {
@@ -1664,6 +1684,7 @@ function renderFeedRows(filtered, animateLast) {
         }
       }
     }
+    const sizeClass = feedSizeCellClass(totalBytes);
     const doFlash = count > 1 && count > prevCount;
     if (count > 1) lastGroupCounts.set(key, count);
     const countClass = doFlash ? ' feed-row-count flash' : ' feed-row-count';
@@ -1698,7 +1719,15 @@ function renderFeedRows(filtered, animateLast) {
     const isExpanded = isGroup && count > 1 && expandedGroups.has(groupKey);
     const blockDisplay = isGroup ? pickGroupBlockDisplay(g.requests) : (req.block_action ? { action: req.block_action, reason: req.block_reason } : null);
     const expandBtnHtml = isGroup && count > 1
-      ? '<button type="button" class="feed-row-expand-btn" aria-label="' + (isExpanded ? 'Collapse' : 'Expand') + ' group" data-group-key="' + escapeAttr(groupKey) + '">' + (isExpanded ? '▼' : '▶') + '</button>'
+      ? '<button type="button" class="feed-row-expand-btn' +
+        (isExpanded ? ' feed-row-expand-btn--open' : '') +
+        '" aria-label="' +
+        (isExpanded ? 'Collapse' : 'Expand') +
+        ' group" data-group-key="' +
+        escapeAttr(groupKey) +
+        '">' +
+        FEED_EXPAND_ICON +
+        '</button>'
       : '';
     row.innerHTML =
       '<span class="feed-cell feed-cell-badge"><span class="feed-badge ' +
@@ -1720,7 +1749,9 @@ function renderFeedRows(filtered, animateLast) {
       '<span class="feed-cell feed-cell-conf">' +
       confPct +
       '%</span>' +
-      '<span class="feed-cell feed-cell-size">' +
+      '<span class="feed-cell feed-cell-size' +
+      sizeClass +
+      '">' +
       sizeStr +
       '</span>';
 
@@ -2551,7 +2582,7 @@ function buildFilterBar() {
   collapseWrap.innerHTML =
     '<input type="checkbox" class="feed-collapse-toggle" id="feed-collapse-toggle" checked aria-label="Group by domain and category">' +
     '<span class="feed-collapse-switch" aria-hidden="true"><span class="feed-collapse-thumb"></span></span>' +
-    '<span class="feed-collapse-label">Group by domain</span>';
+    '<span class="feed-collapse-label">GROUP BY DOMAIN</span>';
   const collapseToggle = collapseWrap.querySelector('#feed-collapse-toggle');
   collapseToggle.addEventListener('change', () => {
     filterState.collapseDuplicates = collapseToggle.checked;
@@ -2561,7 +2592,7 @@ function buildFilterBar() {
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'feed-filter-clear';
-  clearBtn.textContent = 'Clear all';
+  clearBtn.textContent = 'CLEAR ALL';
   clearBtn.addEventListener('click', () => {
     feedRequests = [];
     requestCount = 0;
@@ -2593,6 +2624,8 @@ function buildFilterBar() {
     renderFeed(false);
     scheduleBottomPanelRefresh();
   });
+
+  tabDropdownWrap.classList.add('feed-toolbar-tab');
 
   if (toolbar) {
     const controls = document.createElement('div');
