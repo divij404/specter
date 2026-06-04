@@ -1639,6 +1639,7 @@ function renderFeedRows(filtered, animateLast) {
       '</span></span>' +
       '<span class="feed-cell feed-cell-domain"' + (req.domain ? ' data-tooltip="' + escapeAttr(req.domain) + '"' : '') + '>' +
       escapeAttr(req.domain || '—') +
+      (req.block_action && typeof renderBlockingBadge === 'function' ? renderBlockingBadge(req.block_action, req.block_reason) : '') +
       countHtml +
       expandBtnHtml +
       '</span>' +
@@ -1860,10 +1861,19 @@ function renderDetailPanel() {
   const confColorCls = confRaw >= 0.8 ? 'detail-conf--high' : confRaw >= 0.5 ? 'detail-conf--mid' : 'detail-conf--low';
   const domain = req.domain || '';
 
+  // Show block badge + allow buttons in detail panel if request was acted on
+  const blockBadgeHtml = (req.block_action && typeof renderBlockingBadge === 'function')
+    ? renderBlockingBadge(req.block_action, req.block_reason)
+    : '';
+  const allowBtnsHtml = (req.block_action === 'block' && typeof renderAllowOnSiteButton === 'function')
+    ? renderAllowOnSiteButton(req.domain, req.initiator_domain)
+    : '';
+
   const classifierHtml =
     '<div class="detail-section">' +
     '<div class="detail-classifier-hero">' +
     '<span class="feed-badge ' + badgeClass + ' detail-badge-lg"><span class="feed-badge-dot"></span>' + escapeHtml(badgeLabel) + '</span>' +
+    blockBadgeHtml +
     '<div class="detail-conf-block">' +
     '<span class="detail-conf ' + confColorCls + '">' + confPct + '</span>' +
     '<span class="detail-conf-label">confidence</span>' +
@@ -1873,6 +1883,7 @@ function renderDetailPanel() {
     '<span class="detail-domain-label">Domain</span>' +
     '<span class="detail-domain-val">' + escapeHtml(domain || '—') + '</span>' +
     '</div>' +
+    allowBtnsHtml +
     '</div>';
 
   // --- URL + meta (always visible) ---
@@ -2046,6 +2057,19 @@ function renderDetailPanel() {
       startVtCountdown(remaining);
     }
     vtBtn.addEventListener('click', () => fetchVirusTotal(domain));
+  }
+
+  // Bind "Allow on this site" buttons (v1.2)
+  if (typeof bindAllowOnSiteButtons === 'function') {
+    bindAllowOnSiteButtons((allowedDomain, site) => {
+      // Show a brief confirmation in the detail panel
+      const allowRow = document.getElementById('detail-allow-btn')?.closest('.detail-allow-row');
+      if (allowRow) {
+        allowRow.innerHTML = '<span style="color:var(--status-success);font-size:var(--text-xs)">✓ ' +
+          escapeHtml(allowedDomain) + (site && site !== '*' ? ' allowed on ' + escapeHtml(site) : ' allowed everywhere') +
+          '</span>';
+      }
+    });
   }
 }
 
@@ -2936,6 +2960,12 @@ function init() {
           });
         }
       }
+    } else if (message.type === 'block_action') {
+      // v1.2: update blocking stats display
+      if (typeof onBlockActionMessage === 'function') onBlockActionMessage(message);
+    } else if (message.type === 'domain_allowed') {
+      // v1.2: re-render any blocked badge for this domain in the visible feed
+      renderFeed(false);
     } else if (message.type === 'session_started') {
       hideSessionConfirmBar();
       feedPaused = false;
@@ -2959,6 +2989,8 @@ function init() {
       updateSessionButton(true);
       renderFeed(false);
       refreshSiteSummary();
+      // v1.2: initialise blocking stats for new session
+      if (typeof initBlockingUI === 'function') initBlockingUI(message.session_id);
     } else if (message.type === 'session_stopped') {
       hideSessionConfirmBar();
       feedPaused = false;
@@ -3374,6 +3406,16 @@ async function renderSettingsOverlay() {
     virustotal_enabled: true,
     min_confidence: 0,
     use_ml_classifier: true,
+    // Blocking defaults (v1.2)
+    blocking_enabled:     false,
+    blocking_mode:        'smart',
+    block_threshold:      0.85,
+    strip_threshold:      0.55,
+    block_session_replay: true,
+    block_fingerprinting: true,
+    block_behavioral:     true,
+    block_ad_network:     true,
+    block_analytics:      false,
     ...(stored || {}),
   };
 
@@ -3502,6 +3544,19 @@ async function renderSettingsOverlay() {
       </div>
     </div>`;
 
+  // ── Blocking section (v1.2) — injected after main settings HTML ──────────
+  if (typeof renderBlockingSettingsSection === 'function') {
+    const blockingSection = document.createElement('div');
+    blockingSection.innerHTML = renderBlockingSettingsSection(s);
+    // Insert before danger zone
+    const dangerZone = body.querySelector('.settings-danger-zone');
+    if (dangerZone) {
+      body.insertBefore(blockingSection.firstElementChild, dangerZone);
+    } else {
+      body.appendChild(blockingSection.firstElementChild);
+    }
+  }
+
   // Autoscroll toggle
   document.getElementById('setting-autoscroll').addEventListener('change', (e) => {
     saveSettingField('autoscroll_feed', e.target.checked);
@@ -3603,6 +3658,11 @@ async function renderSettingsOverlay() {
       infoEl.textContent = e.target.checked ? modelStatus : 'Rule-based (weighted multi-signal scorer)';
     }
   });
+
+  // ── Blocking settings events (v1.2) ────────────────────────────────────
+  if (typeof bindBlockingSettingsEvents === 'function') {
+    bindBlockingSettingsEvents(saveSettingField);
+  }
 
   // Clear all data → show modal
   document.getElementById('settings-clear-data').addEventListener('click', () => {
