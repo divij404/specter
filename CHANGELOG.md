@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.4.0] — 2026-06-04
 
+### Fixed
+- Network graph: third-party count now includes all tracker nodes (not only non-legitimate categories)
+- Network graph: nodes stay inside the viewport; edge colors follow target domain category
+- Network graph: cross-site destination domains are no longer stuck as page initiator type
+
+### Changed
+- Network graph: node radius scales with request volume; headline uses “N third-party systems detected”
+- Network graph: Reset layout uses ghost styling; drag hint on empty and live graph states
+
 ### Added
 - Dashboard **Network** tab: live D3 force-directed graph of domain-to-domain request flow (initiator → target)
 - Graph respects feed filters and site-summary scope (same as timeline); debounced live updates during recording

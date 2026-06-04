@@ -377,6 +377,41 @@ body,
   border-color: var(--border-strong);
 }
 
+.graph-toolbar-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.graph-toolbar-btn--ghost:hover {
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+.graph-toolbar-btn--primary {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.graph-toolbar-btn--primary:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.graph-drag-hint {
+  flex-shrink: 0;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-ghost);
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
 .graph-cap-banner {
   flex-shrink: 0;
   font-family: var(--font-mono);
@@ -433,6 +468,11 @@ body,
   border: 1px solid var(--border-strong);
 }
 
+.graph-legend-swatch--related {
+  background: var(--cat-legitimate);
+  opacity: 0.85;
+}
+
 .graph-empty-state {
   display: flex;
   flex-direction: column;
@@ -455,6 +495,10 @@ body,
   color: var(--text-muted);
   text-align: center;
   max-width: 280px;
+}
+
+.graph-empty-state .graph-drag-hint {
+  margin-top: var(--space-1);
 }
 
 .timeline-root {

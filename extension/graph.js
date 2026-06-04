@@ -21,6 +21,24 @@ let graphSimulation = null;
 let graphResizeObserver = null;
 let graphRenderGeneration = 0;
 
+const GRAPH_BRAND_CDN = /cdn|assets?|images?|img|static|media|content/i;
+
+/** Mirror service_worker brand-sibling heuristic for graph display on stored requests. */
+function isBrandSiblingAssetHost(pageDomain, targetDomain) {
+  if (!pageDomain || !targetDomain || pageDomain === targetDomain) return false;
+  const stem = pageDomain.split('.')[0];
+  if (stem.length < 4) return false;
+  if (!targetDomain.startsWith(stem)) return false;
+  return GRAPH_BRAND_CDN.test(targetDomain);
+}
+
+function graphRequestCategory(req) {
+  const src = req.initiator_domain || '_direct';
+  const dst = req.domain;
+  if (dst && isBrandSiblingAssetHost(src, dst)) return 'legitimate';
+  return req.category || 'unclassified';
+}
+
 function buildRequestGraph(requests) {
   const nodes = new Map();
   const edgeMap = new Map();
@@ -36,14 +54,15 @@ function buildRequestGraph(requests) {
     }
   }
 
-  function ensureTrackerNode(id, category) {
+  function ensureDestNode(id, category, related) {
     const cat = category || 'unclassified';
     let n = nodes.get(id);
     if (!n) {
-      n = { id, type: 'tracker', category: cat, catCounts: {} };
+      n = { id, type: related ? 'related' : 'tracker', category: cat, catCounts: {} };
       nodes.set(id, n);
     }
-    if (n.type === 'tracker') {
+    if (n.type === 'tracker' || n.type === 'related') {
+      if (related) n.type = 'related';
       n.catCounts[cat] = (n.catCounts[cat] || 0) + 1;
     }
   }
@@ -53,21 +72,32 @@ function buildRequestGraph(requests) {
     const dst = req.domain;
     if (!dst || dst === src) continue;
 
+    const cat = graphRequestCategory(req);
+    const related = cat === 'legitimate' && isBrandSiblingAssetHost(src, dst);
+
     bumpVolume(src, 1);
     bumpVolume(dst, 1);
     ensurePageNode(src);
-    ensureTrackerNode(dst, req.category);
+    ensureDestNode(dst, cat, related);
 
     const key = src + '\0' + dst;
     if (!edgeMap.has(key)) {
-      edgeMap.set(key, { source: src, target: dst, category: req.category || 'unclassified', count: 0 });
+      edgeMap.set(key, { source: src, target: dst, category: cat, count: 0, related });
     }
     const edge = edgeMap.get(key);
     edge.count += 1;
+    if (related) edge.related = true;
+  }
+
+  // Domains used only as cross-site targets must not stay typed as page initiators.
+  for (const e of edgeMap.values()) {
+    if (e.related || e.source === e.target) continue;
+    const tgt = nodes.get(e.target);
+    if (tgt && tgt.type === 'page') tgt.type = 'tracker';
   }
 
   for (const n of nodes.values()) {
-    if (n.type === 'tracker' && n.catCounts) {
+    if ((n.type === 'tracker' || n.type === 'related') && n.catCounts) {
       let best = n.category;
       let bestN = 0;
       for (const [cat, cnt] of Object.entries(n.catCounts)) {
@@ -94,24 +124,20 @@ function buildRequestGraph(requests) {
     edgeList = edgeList.filter((e) => keep.has(e.source) && keep.has(e.target));
   }
 
-  const thirdPartyIds = new Set();
+  const nodeById = new Map(nodeList.map((n) => [n.id, n]));
   for (const e of edgeList) {
-    const tgtNode = nodeList.find((n) => n.id === e.target);
-    if (
-      tgtNode &&
-      tgtNode.type === 'tracker' &&
-      tgtNode.category !== 'legitimate' &&
-      e.target !== e.source
-    ) {
-      thirdPartyIds.add(e.target);
-    }
+    const tgt = nodeById.get(e.target);
+    e.strokeCategory = e.related ? 'legitimate' : (tgt?.category || 'unclassified');
   }
+
+  const thirdPartyCount = nodeList.filter((n) => n.type === 'tracker').length;
 
   return {
     nodes: nodeList,
     edges: edgeList,
     capped,
-    thirdPartyCount: thirdPartyIds.size,
+    thirdPartyCount,
+    nodeById,
   };
 }
 
@@ -169,10 +195,17 @@ function renderGraphLegend(root) {
   pageItem.appendChild(pageSwatch);
   pageItem.appendChild(document.createTextNode('Page / initiator'));
   legend.appendChild(pageItem);
+  const relatedItem = document.createElement('span');
+  relatedItem.className = 'graph-legend-item';
+  const relatedSwatch = document.createElement('span');
+  relatedSwatch.className = 'graph-legend-swatch graph-legend-swatch--related';
+  relatedItem.appendChild(relatedSwatch);
+  relatedItem.appendChild(document.createTextNode('Site assets'));
+  legend.appendChild(relatedItem);
   root.appendChild(legend);
 }
 
-function renderGraphEmpty(container, message) {
+function renderGraphEmpty(container, message, showDragHint) {
   container.innerHTML =
     '<div class="graph-empty-state">' +
     '<svg class="graph-empty-icon" viewBox="0 0 48 32" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">' +
@@ -183,7 +216,41 @@ function renderGraphEmpty(container, message) {
     '<line x1="17" y1="18" x2="35" y2="23"/>' +
     '</svg>' +
     '<span class="graph-empty-text">' + message + '</span>' +
+    (showDragHint
+      ? '<span class="graph-drag-hint">Drag nodes to rearrange the layout</span>'
+      : '') +
     '</div>';
+}
+
+function graphHeadlineText(thirdPartyCount, hasEdges) {
+  if (!hasEdges) return { text: 'No third-party connections in this view', html: false };
+  if (thirdPartyCount === 0) {
+    return {
+      text: 'Only same-brand asset hosts — no third-party trackers in this view',
+      html: false,
+    };
+  }
+  const n = thirdPartyCount;
+  return {
+    text: null,
+    html:
+      '<strong>' +
+      n +
+      '</strong> third-party ' +
+      (n === 1 ? 'system' : 'systems') +
+      ' detected',
+  };
+}
+
+function graphNodeRadius(d) {
+  if (d.type === 'page') return 11;
+  if (d.type === 'related') return 7 + Math.min(3, Math.sqrt(d.volume || 1) * 0.35);
+  const vol = d.volume || 1;
+  return 6 + Math.min(10, Math.sqrt(vol) * 1.15);
+}
+
+function graphCollisionRadius(d) {
+  return graphNodeRadius(d) + 4;
 }
 
 function renderGraphPanel() {
@@ -207,14 +274,15 @@ function renderGraphPanel() {
   const requests = graphDeps.getGraphRequests();
   const { nodes, edges, capped, thirdPartyCount } = buildRequestGraph(requests);
 
+  const dragHintEl = document.getElementById('graph-drag-hint');
+  if (dragHintEl) {
+    dragHintEl.hidden = edges.length === 0;
+  }
+
   if (headlineEl) {
-    if (edges.length === 0) {
-      headlineEl.textContent = 'No third-party connections in this view';
-    } else {
-      headlineEl.innerHTML =
-        'This view shares data with <strong>' + thirdPartyCount + '</strong> third-party ' +
-        (thirdPartyCount === 1 ? 'system' : 'systems');
-    }
+    const hl = graphHeadlineText(thirdPartyCount, edges.length > 0);
+    if (hl.html) headlineEl.innerHTML = hl.html;
+    else headlineEl.textContent = hl.text;
   }
 
   if (capBanner) {
@@ -236,13 +304,15 @@ function renderGraphPanel() {
     } else if (requests.length === 0) {
       msg = 'No requests for the selected site match the current filters.';
     }
-    renderGraphEmpty(container, msg);
+    renderGraphEmpty(container, msg, true);
     return;
   }
 
   const W = container.clientWidth || 400;
   const H = container.clientHeight || 200;
   if (W < 40 || H < 40) return;
+
+  const VIEW_PAD = 22;
 
   const svg = d3.select(container).append('svg').attr('width', W).attr('height', H).attr('class', 'graph-svg');
 
@@ -251,8 +321,21 @@ function renderGraphPanel() {
   const linkData = edges.map((e) => ({ ...e }));
 
   const colorFor = (d) => {
-    if (d.type === 'page') return graphDeps.getCategoryColorHex('legitimate') || '#64748b';
+    if (d.type === 'page' || d.type === 'related') {
+      return graphDeps.getCategoryColorHex('legitimate') || '#64748b';
+    }
     return graphDeps.getCategoryColorHex(d.category) || '#888';
+  };
+
+  const edgeColorFor = (d) => {
+    const cat = d.strokeCategory || (d.related ? 'legitimate' : 'unclassified');
+    return graphDeps.getCategoryColorHex(cat) || '#888';
+  };
+
+  const clampNode = (d) => {
+    const r = graphNodeRadius(d);
+    d.x = Math.max(VIEW_PAD + r, Math.min(W - VIEW_PAD - r, d.x));
+    d.y = Math.max(VIEW_PAD + r, Math.min(H - VIEW_PAD - r, d.y));
   };
 
   const simulation = d3
@@ -266,7 +349,7 @@ function renderGraphPanel() {
     )
     .force('charge', d3.forceManyBody().strength(-220))
     .force('center', d3.forceCenter(W / 2, H / 2))
-    .force('collision', d3.forceCollide().radius((d) => (d.type === 'page' ? 18 : 12)));
+    .force('collision', d3.forceCollide().radius((d) => graphCollisionRadius(d)));
 
   graphSimulation = simulation;
 
@@ -276,9 +359,9 @@ function renderGraphPanel() {
     .selectAll('line')
     .data(linkData)
     .join('line')
-    .attr('stroke', (d) => graphDeps.getCategoryColorHex(d.category))
+    .attr('stroke', edgeColorFor)
     .attr('stroke-width', (d) => Math.min(6, 1 + Math.log(d.count || 1)))
-    .attr('stroke-opacity', 0.55);
+    .attr('stroke-opacity', 0.65);
 
   const node = g
     .append('g')
@@ -286,7 +369,7 @@ function renderGraphPanel() {
     .selectAll('circle')
     .data(nodeData)
     .join('circle')
-    .attr('r', (d) => (d.type === 'page' ? 11 : 7))
+    .attr('r', graphNodeRadius)
     .attr('fill', colorFor)
     .attr('stroke', 'var(--bg-base)')
     .attr('stroke-width', 1.5)
@@ -300,8 +383,9 @@ function renderGraphPanel() {
           d.fy = d.y;
         })
         .on('drag', (event, d) => {
-          d.fx = event.x;
-          d.fy = event.y;
+          const r = graphNodeRadius(d);
+          d.fx = Math.max(VIEW_PAD + r, Math.min(W - VIEW_PAD - r, event.x));
+          d.fy = Math.max(VIEW_PAD + r, Math.min(H - VIEW_PAD - r, event.y));
         })
         .on('end', (event, d) => {
           if (!event.active) simulation.alphaTarget(0);
@@ -329,7 +413,9 @@ function renderGraphPanel() {
   node
     .on('mouseenter', function (event, d) {
       const lines = [graphNodeLabel(d.id)];
-      lines.push(d.type === 'page' ? 'Page / initiator' : graphDeps.categoryLabel(d.category));
+      if (d.type === 'page') lines.push('Page / initiator');
+      else if (d.type === 'related') lines.push('Site assets (same brand)');
+      else lines.push(graphDeps.categoryLabel(d.category));
       lines.push('Requests: ' + (d.volume || 0));
       graphShowTooltip(event, lines);
     })
@@ -342,15 +428,17 @@ function renderGraphPanel() {
     .on('mouseenter', function (event, d) {
       const src = typeof d.source === 'object' ? d.source.id : d.source;
       const tgt = typeof d.target === 'object' ? d.target.id : d.target;
+      const cat = d.strokeCategory || 'unclassified';
       graphShowTooltip(event, [
         graphNodeLabel(src) + ' \u2192 ' + graphNodeLabel(tgt),
-        graphDeps.categoryLabel(d.category) + ' \u00b7 ' + d.count + ' request' + (d.count === 1 ? '' : 's'),
+        graphDeps.categoryLabel(cat) + ' \u00b7 ' + d.count + ' request' + (d.count === 1 ? '' : 's'),
       ]);
     })
     .on('mouseleave', graphHideTooltip);
 
   simulation.on('tick', () => {
     if (gen !== graphRenderGeneration) return;
+    for (const d of nodeData) clampNode(d);
     link
       .attr('x1', (d) => d.source.x)
       .attr('y1', (d) => d.source.y)
