@@ -119,6 +119,14 @@
               aria-selected="false"
               aria-controls="fingerprint-drawer"
             >Fingerprinting</button>
+            <button
+              type="button"
+              role="tab"
+              id="bottom-tab-network"
+              class="bottom-panel-tab"
+              aria-selected="false"
+              aria-controls="dashboard-network-layer"
+            >Network</button>
           </div>
         </div>
         <div id="dashboard-bottom-stack" class="dashboard-bottom-stack" data-view="timeline">
@@ -141,6 +149,24 @@
             <div class="fingerprint-drawer-scroll">
               <div id="fingerprint-signal-rows" class="fingerprint-signal-rows"></div>
             </div>
+          </div>
+        </div>
+        <div
+          id="dashboard-network-layer"
+          class="dashboard-bottom-layer dashboard-bottom-layer--network"
+          aria-hidden="true"
+        >
+          <div class="graph-panel">
+            <div class="graph-toolbar">
+              <p class="graph-headline" id="graph-headline">No third-party connections in this view</p>
+              <div class="graph-toolbar-actions">
+                <button type="button" class="graph-toolbar-btn" id="graph-reset-btn">Reset layout</button>
+                <button type="button" class="graph-toolbar-btn" id="graph-export-btn">Export SVG</button>
+              </div>
+            </div>
+            <div id="graph-cap-banner" class="graph-cap-banner" hidden></div>
+            <div id="graph-container" class="graph-container"></div>
+            <div id="graph-legend-host" class="graph-legend-host"></div>
           </div>
         </div>
         </div>
@@ -227,6 +253,7 @@
   <script src="lib/d3.min.js"></script>
   <script src="blocking-ui.js"></script>
   <script src="fp-defense-ui.js"></script>
+  <script src="graph.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>

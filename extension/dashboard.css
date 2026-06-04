@@ -241,6 +241,13 @@ body,
   pointer-events: none;
 }
 
+.dashboard-bottom-layer--network {
+  z-index: 1;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+}
+
 /* → Fingerprint view: timeline exits upward, fingerprint enters from below */
 .dashboard-bottom-stack[data-view='fingerprint'] .dashboard-bottom-layer--timeline {
   z-index: 0;
@@ -262,8 +269,38 @@ body,
     transform 130ms cubic-bezier(0.16, 1, 0.3, 1) 70ms;
 }
 
+.dashboard-bottom-stack[data-view='fingerprint'] .dashboard-bottom-layer--network {
+  z-index: 0;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+}
+
+/* → Network view */
+.dashboard-bottom-stack[data-view='network'] .dashboard-bottom-layer--timeline,
+.dashboard-bottom-stack[data-view='network'] .dashboard-bottom-layer--fingerprint {
+  z-index: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition:
+    opacity 80ms ease-in,
+    transform 80ms ease-in;
+}
+
+.dashboard-bottom-stack[data-view='network'] .dashboard-bottom-layer--network {
+  z-index: 2;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition:
+    opacity 130ms cubic-bezier(0.16, 1, 0.3, 1) 70ms,
+    transform 130ms cubic-bezier(0.16, 1, 0.3, 1) 70ms;
+}
+
 /* → Timeline view: fingerprint exits downward, timeline enters from above */
-.dashboard-bottom-stack[data-view='timeline'] .dashboard-bottom-layer--fingerprint {
+.dashboard-bottom-stack[data-view='timeline'] .dashboard-bottom-layer--fingerprint,
+.dashboard-bottom-stack[data-view='timeline'] .dashboard-bottom-layer--network {
   z-index: 0;
   opacity: 0;
   transform: translateY(6px);
@@ -281,6 +318,143 @@ body,
   transition:
     opacity 130ms cubic-bezier(0.16, 1, 0.3, 1) 70ms,
     transform 130ms cubic-bezier(0.16, 1, 0.3, 1) 70ms;
+}
+
+.graph-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-2) var(--space-3) var(--space-2);
+  gap: var(--space-1);
+}
+
+.graph-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+.graph-headline {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.graph-headline strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.graph-toolbar-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.graph-toolbar-btn {
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.graph-toolbar-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.graph-cap-banner {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.graph-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.graph-svg {
+  display: block;
+}
+
+.graph-legend-host {
+  flex-shrink: 0;
+  min-height: 22px;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+
+.graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.graph-legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.graph-legend-swatch--page {
+  background: var(--text-ghost);
+  border: 1px solid var(--border-strong);
+}
+
+.graph-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.graph-empty-icon {
+  width: 48px;
+  height: 32px;
+  color: var(--text-ghost);
+}
+
+.graph-empty-text {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 280px;
 }
 
 .timeline-root {
