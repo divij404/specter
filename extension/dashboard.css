@@ -886,6 +886,10 @@ body,
   line-height: 1.25;
 }
 
+.site-summary-stat-box--blocked .value {
+  color: var(--status-error);
+}
+
 .site-summary-worst {
   margin: 0;
   flex: 1 1 auto;
@@ -3715,6 +3719,7 @@ body,
 }
 .bstat--blocked  { color: var(--status-error); }
 .bstat--stripped { color: var(--status-warning); }
+.bstat--warned   { color: var(--text-secondary); }
 .bstat-sep {
   width: 1px;
   height: 12px;
@@ -3735,6 +3740,13 @@ body,
 .settings-section--blocking .settings-row--nested .settings-row-hint {
   font-size: var(--text-2xs);
   margin-top: 1px;
+}
+.settings-row-hint--mode {
+  margin-top: var(--space-1);
+}
+.settings-row--inactive {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 /* ── Inline tag (caution / warning) ── */

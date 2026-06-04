@@ -5,44 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.3.1] — 2026-06-04
-
-### Added
-- Popup shows **N blocked today** when blocking is enabled (`blocking:daily` aggregate)
-- DNR cleanup rules for trailing `?` and `?&` after param-only strips
-
-### Fixed
-- Site summary no longer hides score and KPIs when tracker count is zero (clean sites show full panel)
-- Allow-list modal no longer stacks duplicate click handlers on reopen
-- Param strip leaving `https://example.com?` when the only query param is removed
-- Blocking stats race and allow-on-site callback mismatch in the detail panel
-- Feed filter and tab controls aligned in the toolbar; opening one dropdown closes the other
-- Dashboard layout alignment, contrast, and detail panel hierarchy
-
-### Changed
-- Settings overlay: 3-column layout (Feed/Classifier · Blocking/FP defense · Integrations)
-- Bottom panel: Timeline / Fingerprinting tabs instead of chevron toggle
-- Bottom panel card styling aligned with Site Summary; donut center labeled **requests**
-- Feed **Clear all** button muted by default; confidence column dimmed when all values match
-- Dashboard settings nav icon changed to sliders (no longer reads as brightness)
-
-## [1.3.0] — 2026-06-04
-
-### Added
-- **Fingerprint defense** (opt-in, off by default): MAIN-world `document_start` hooks for canvas, WebGL, audio, navigator, and font enumeration APIs
-- Per-surface toggles in Dashboard → Settings; session-scoped PRNG seed set when a recording session starts
-- Service worker injects `__specter_fp_cfg__` / `__specter_fp_seed__` into `sessionStorage` on navigation (`scripting` + `webNavigation`)
-
-### Changed
-- Extension version **1.3**; manifest adds `scripting`, `webNavigation`, and `fp-defense.js` content script (`world: MAIN`, `all_frames`)
-
 ## [1.2.2] — 2026-06-04
 
 ### Added
 - Site summary **BLOCKED** stat when blocking is enabled
 - Allow-list **Export** (JSON to clipboard) and **Clear session blocking stats** in settings
 - Blocking mode hints for Smart, Strict, and Param strip only
-- Popup and settings stats include **flagged** (warn) counts; popup shows session blocked/stripped totals
+- Popup and settings stats include **flagged** (warn) counts
 
 ### Fixed
 - Per-site allow no longer removes a domain from global DNR rules — only **Allow everywhere** clears dynamic blocks

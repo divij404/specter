@@ -190,14 +190,20 @@ async function allowDomain(domain, site = '*') {
   list.add(key);
   await chrome.storage.local.set({ 'blocking:allowlist': [...list] });
 
-  // Remove from dynamic block rules
-  if (dynamicBlockedDomains.has(domain)) {
+  // Global allow removes DNR block; site-specific allow relies on allow-list only.
+  if (site === '*' && dynamicBlockedDomains.has(domain)) {
     dynamicBlockedDomains.delete(domain);
     const rr = await chrome.storage.local.get('blocking:dynamic_domains');
     const domains = (rr['blocking:dynamic_domains'] || []).filter(d => d !== domain);
     await chrome.storage.local.set({ 'blocking:dynamic_domains': domains });
     await rebuildDNRRules();
   }
+}
+
+async function clearBlockingStats(sessionId) {
+  if (!sessionId) return;
+  blockStatsCache.delete(sessionId);
+  await chrome.storage.local.remove('blocking:stats:' + sessionId);
 }
 
 // ── DNR rule management ───────────────────────────────────────────────────────

@@ -31,18 +31,22 @@ async function initBlockingUI(sessionId) {
 function onBlockActionMessage(msg) {
   if (msg.action === 'block') blockingStats.blocked++;
   if (msg.action === 'strip_params') blockingStats.stripped++;
+  if (msg.action === 'warn') blockingStats.warned++;
   renderBlockingStatsBadges();
 }
 
 function renderBlockingStatsBadges() {
   const el = document.getElementById('blocking-stats-bar');
   if (!el) return;
-  const { blocked, stripped } = blockingStats;
-  const total = blocked + stripped;
+  const { blocked, stripped, warned } = blockingStats;
+  const total = blocked + stripped + warned;
   if (total === 0) {
     el.innerHTML = `<span class="bstat-label">No actions this session</span>`;
     el.className = 'blocking-stats-bar';
   } else {
+    const warnedHtml = warned > 0
+      ? `<span class="bstat-sep"></span><span class="bstat bstat--warned">${warned} flagged</span>`
+      : '';
     el.innerHTML =
       `<span class="bstat bstat--blocked">
         <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true">
@@ -57,7 +61,8 @@ function renderBlockingStatsBadges() {
           <path d="M1.5 2.5h6M1.5 4.5h4.5M1.5 6.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
         </svg>
         ${stripped} stripped
-      </span>`;
+      </span>` +
+      warnedHtml;
     el.className = 'blocking-stats-bar blocking-stats-bar--active';
   }
 }
@@ -122,6 +127,7 @@ function renderBlockingSettingsSection(s) {
   <div class="settings-row${disClass}" id="blocking-mode-row">
     <div class="settings-row-label">
       <div class="settings-row-title">Blocking mode</div>
+      <div class="settings-row-hint settings-row-hint--mode" id="blocking-mode-hint"></div>
     </div>
     <select id="setting-blocking-mode" class="settings-select"${disAttr}>
       ${modeOptions}
@@ -211,8 +217,24 @@ function renderBlockingSettingsSection(s) {
       <div class="settings-row-title">Allow-list</div>
       <div class="settings-row-hint">Domains exempted from blocking. Add entries via the request detail panel.</div>
     </div>
-    <button type="button" class="settings-ghost-btn" id="settings-view-allowlist">
-      View list
+    <div class="settings-row-side">
+      <button type="button" class="settings-ghost-btn" id="settings-export-allowlist">
+        Export
+      </button>
+      <button type="button" class="settings-ghost-btn" id="settings-view-allowlist">
+        View list
+      </button>
+    </div>
+  </div>
+
+  <!-- Session stats -->
+  <div class="settings-row${disClass}">
+    <div class="settings-row-label">
+      <div class="settings-row-title">Session blocking stats</div>
+      <div class="settings-row-hint">Blocked, stripped, and flagged counts for the current session.</div>
+    </div>
+    <button type="button" class="settings-ghost-btn" id="settings-clear-blocking-stats"${disAttr}>
+      Clear
     </button>
   </div>
 
@@ -253,6 +275,25 @@ function renderAllowlistModalContent(entries) {
 </table>`;
 }
 
+// ── Mode hint copy ────────────────────────────────────────────────────────────
+
+const BLOCKING_MODE_HINTS = {
+  smart: 'ML confidence and category toggles control what gets blocked.',
+  strict: 'Blocks all third-party requests except known CDNs, regardless of score.',
+  strip_only: 'Removes tracking query parameters only; no domain blocking.',
+};
+
+function updateBlockingModeHint(mode) {
+  const el = document.getElementById('blocking-mode-hint');
+  if (el) el.textContent = BLOCKING_MODE_HINTS[mode] || '';
+  const thresholdRow = document.getElementById('blocking-threshold-row');
+  const thresholdSlider = document.getElementById('setting-block-threshold');
+  const armed = !!document.getElementById('setting-blocking-enabled')?.checked;
+  const smartOnly = mode === 'smart' && armed;
+  if (thresholdRow) thresholdRow.classList.toggle('settings-row--inactive', !smartOnly);
+  if (thresholdSlider) thresholdSlider.disabled = !smartOnly;
+}
+
 // ── Event binding ─────────────────────────────────────────────────────────────
 
 function bindBlockingSettingsEvents(saveSettingFieldFn) {
@@ -285,6 +326,8 @@ function bindBlockingSettingsEvents(saveSettingFieldFn) {
     // Toggle armed state on the section card
     const section = document.getElementById('settings-blocking');
     if (section) section.classList.toggle('settings-section--blocking-armed', armed);
+    const modeSelect = document.getElementById('setting-blocking-mode');
+    if (modeSelect) updateBlockingModeHint(modeSelect.value);
   }
 
   enabledToggle.addEventListener('change', (e) => {
@@ -293,9 +336,14 @@ function bindBlockingSettingsEvents(saveSettingFieldFn) {
     setBlockingArmed(enabled);
   });
 
-  document.getElementById('setting-blocking-mode')?.addEventListener('change', (e) => {
-    saveSettingFieldFn('blocking_mode', e.target.value);
-  });
+  const modeSelect = document.getElementById('setting-blocking-mode');
+  if (modeSelect) {
+    updateBlockingModeHint(modeSelect.value);
+    modeSelect.addEventListener('change', (e) => {
+      saveSettingFieldFn('blocking_mode', e.target.value);
+      updateBlockingModeHint(e.target.value);
+    });
+  }
 
   const thresholdSlider = document.getElementById('setting-block-threshold');
   const thresholdLabel  = document.getElementById('block-threshold-label');
@@ -322,6 +370,34 @@ function bindBlockingSettingsEvents(saveSettingFieldFn) {
   document.getElementById('settings-view-allowlist')?.addEventListener('click', () => {
     chrome.storage.local.get('blocking:allowlist', (r) => {
       showAllowlistModal(r['blocking:allowlist'] || []);
+    });
+  });
+
+  document.getElementById('settings-export-allowlist')?.addEventListener('click', () => {
+    chrome.storage.local.get('blocking:allowlist', (r) => {
+      const entries = r['blocking:allowlist'] || [];
+      const text = JSON.stringify(entries, null, 2);
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('settings-export-allowlist');
+        if (btn) {
+          const orig = btn.textContent;
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        }
+      });
+    });
+  });
+
+  document.getElementById('settings-clear-blocking-stats')?.addEventListener('click', () => {
+    chrome.storage.local.get('session:current', (r) => {
+      const sid = r['session:current']?.id;
+      if (!sid) return;
+      chrome.runtime.sendMessage({ type: 'clear_blocking_stats', session_id: sid }, (res) => {
+        if (res?.ok) {
+          blockingStats = { blocked: 0, stripped: 0, warned: 0 };
+          renderBlockingStatsBadges();
+        }
+      });
     });
   });
 }

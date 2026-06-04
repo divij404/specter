@@ -357,6 +357,9 @@ function renderSiteSummary() {
     if (categoryCounts[cat] != null) categoryCounts[cat] += 1;
   }
 
+  const blockCounts = countBlockingActions(requestsForSite);
+  const blockingOn = !!settings.blocking_enabled;
+
   const scoreValueEl = document.createElement('span');
   scoreValueEl.className = 'site-summary-score-value ' + scoreClass;
   scoreValueEl.setAttribute('aria-live', 'polite');
@@ -406,6 +409,11 @@ function renderSiteSummary() {
     '<div class="site-summary-stat-box"><div class="label">UNIQUE TRACKER DOMAINS</div><div class="value">' +
     escapeAttr(String(uniqueTrackers)) +
     '</div></div>' +
+    (blockingOn
+      ? '<div class="site-summary-stat-box site-summary-stat-box--blocked"><div class="label">BLOCKED</div><div class="value">' +
+        escapeAttr(String(blockCounts.blocked)) +
+        '</div></div>'
+      : '') +
     '<div class="site-summary-stat-box"><div class="label">DATA VOLUME</div><div class="value">' +
     escapeAttr(dataVolumeKB) +
     '</div></div>';
@@ -1455,12 +1463,36 @@ function initTimelineResizeObserver() {
   if (layer) timelineResizeObserver.observe(layer);
 }
 
+function feedGroupKey(r) {
+  return (r.domain || '') + '\0' + (r.category || '') + '\0' + (r.block_action || '');
+}
+
+function pickGroupBlockDisplay(requests) {
+  for (const action of ['block', 'strip_params', 'warn']) {
+    const r = requests.find((x) => x.block_action === action);
+    if (r) return { action: r.block_action, reason: r.block_reason };
+  }
+  return null;
+}
+
+function countBlockingActions(requests) {
+  let blocked = 0;
+  let stripped = 0;
+  let warned = 0;
+  for (const r of requests) {
+    if (r.block_action === 'block') blocked++;
+    else if (r.block_action === 'strip_params') stripped++;
+    else if (r.block_action === 'warn') warned++;
+  }
+  return { blocked, stripped, warned };
+}
+
 function groupByDomainCategory(requests) {
   const map = new Map();
   for (const r of requests) {
-    const key = (r.domain || '') + '\0' + (r.category || '');
+    const key = feedGroupKey(r);
     if (!map.has(key)) {
-      map.set(key, { domain: r.domain, category: r.category, requests: [], id: r.id });
+      map.set(key, { domain: r.domain, category: r.category, block_action: r.block_action, requests: [], id: r.id });
     }
     const g = map.get(key);
     g.requests.push(r);
@@ -1579,7 +1611,7 @@ function renderFeedRows(filtered, animateLast) {
     const confPct = (conf * 100).toFixed(0);
     const badgeClass = categoryToBadgeClass(req.category);
     const count = g.requests.length | 0;
-    const key = (req.domain || '') + '\0' + (req.category || '');
+    const key = feedGroupKey(req);
     const prevCount = lastGroupCounts.get(key) || 0;
     /* Size: single value or sum for collapsed group; show KB or MB */
     let sizeStr = '—';
@@ -1624,8 +1656,9 @@ function renderFeedRows(filtered, animateLast) {
     }
 
     const badgeTip = categoryTooltip(req.category) || (categoryLabel(req.category) + ' — category');
-    const groupKey = (req.domain || '') + '\0' + (req.category || '');
+    const groupKey = feedGroupKey(req);
     const isExpanded = isGroup && count > 1 && expandedGroups.has(groupKey);
+    const blockDisplay = isGroup ? pickGroupBlockDisplay(g.requests) : (req.block_action ? { action: req.block_action, reason: req.block_reason } : null);
     const expandBtnHtml = isGroup && count > 1
       ? '<button type="button" class="feed-row-expand-btn" aria-label="' + (isExpanded ? 'Collapse' : 'Expand') + ' group" data-group-key="' + escapeAttr(groupKey) + '">' + (isExpanded ? '▼' : '▶') + '</button>'
       : '';
@@ -1639,7 +1672,7 @@ function renderFeedRows(filtered, animateLast) {
       '</span></span>' +
       '<span class="feed-cell feed-cell-domain"' + (req.domain ? ' data-tooltip="' + escapeAttr(req.domain) + '"' : '') + '>' +
       escapeAttr(req.domain || '—') +
-      (req.block_action && typeof renderBlockingBadge === 'function' ? renderBlockingBadge(req.block_action, req.block_reason) : '') +
+      (blockDisplay && typeof renderBlockingBadge === 'function' ? renderBlockingBadge(blockDisplay.action, blockDisplay.reason) : '') +
       countHtml +
       expandBtnHtml +
       '</span>' +
@@ -1703,6 +1736,7 @@ function renderFeedRows(filtered, animateLast) {
           '<span class="feed-cell feed-cell-domain feed-cell-domain--sub" ' + (subReq.domain ? 'data-tooltip="' + escapeAttr(subReq.url || subReq.domain) + '"' : '') + '>' +
           '<span class="feed-sub-indent" aria-hidden="true">└</span>' +
           escapeAttr(subPathDisplay) +
+          (subReq.block_action && typeof renderBlockingBadge === 'function' ? renderBlockingBadge(subReq.block_action, subReq.block_reason) : '') +
           '</span>' +
           '<span class="feed-cell feed-cell-url" style="color:var(--text-ghost);font-size:var(--text-2xs)">' +
           escapeAttr(subReq.method || '—') +
@@ -1865,7 +1899,7 @@ function renderDetailPanel() {
   const blockBadgeHtml = (req.block_action && typeof renderBlockingBadge === 'function')
     ? renderBlockingBadge(req.block_action, req.block_reason)
     : '';
-  const allowBtnsHtml = (req.block_action === 'block' && typeof renderAllowOnSiteButton === 'function')
+  const allowBtnsHtml = (req.block_action && req.block_action !== 'observe' && typeof renderAllowOnSiteButton === 'function')
     ? renderAllowOnSiteButton(req.domain, req.initiator_domain)
     : '';
 
@@ -3372,6 +3406,9 @@ async function saveSettingField(key, value) {
   const next = { ...(stored || {}), [key]: value };
   await chrome.storage.local.set({ settings: next });
   settings[key] = value;
+  if (key === 'blocking_enabled' || key.startsWith('block_') || key === 'blocking_mode') {
+    renderSiteSummary();
+  }
 }
 
 async function pruneOldSessions() {

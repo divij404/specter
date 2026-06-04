@@ -729,7 +729,7 @@ chrome.webRequest.onCompleted.addListener(
     broadcastToDashboard({ type: 'request_update', request });
 
     // Notify dashboard of blocking action separately so it can update counters
-    if (blockDecision.action === 'block' || blockDecision.action === 'strip_params') {
+    if (blockDecision.action !== 'observe') {
       broadcastToDashboard({ type: 'block_action', action: blockDecision.action, domain: features.domain, reason: blockDecision.reason });
     }
   },
@@ -902,6 +902,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'get_blocking_stats') {
     const sid = message.session_id;
     getBlockingStats(sid).then((stats) => sendResponse({ ok: true, stats }));
+    return true;
+  }
+  if (message.type === 'clear_blocking_stats') {
+    clearBlockingStats(message.session_id).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (message.type === 'rebuild_dnr_rules') {
