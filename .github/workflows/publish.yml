@@ -10,6 +10,7 @@ permissions:
 
 env:
   EXTENSION_ID: dimockbooampdcmcboibloaflhmpokbl
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   publish:
@@ -19,7 +20,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies and bundle libs
@@ -56,6 +57,8 @@ jobs:
             -x "*.md"
           cd ..
           ls -lh "specter-${VERSION}.zip"
+          unzip -l "specter-${VERSION}.zip" | head -20
+          unzip -l "specter-${VERSION}.zip" | grep -q 'manifest.json' || (echo 'Zip must contain manifest.json at root' && exit 1)
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -64,14 +67,24 @@ jobs:
           path: specter-${{ steps.version.outputs.version }}.zip
           retention-days: 90
 
-      - name: Upload to Chrome Web Store
-        uses: trmcnvn/chrome-addon@v2
-        with:
-          extension: ${{ env.EXTENSION_ID }}
-          zip: specter-${{ steps.version.outputs.version }}.zip
-          client-id: ${{ secrets.CWS_CLIENT_ID }}
-          client-secret: ${{ secrets.CWS_CLIENT_SECRET }}
-          refresh-token: ${{ secrets.CWS_REFRESH_TOKEN }}
+      - name: Upload package to Chrome Web Store
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          npx --yes chrome-webstore-upload-cli@2 upload \
+            --source "specter-${{ steps.version.outputs.version }}.zip" \
+            --extension-id "${{ env.EXTENSION_ID }}"
+
+      - name: Submit for review (publish)
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          npx --yes chrome-webstore-upload-cli@2 publish \
+            --extension-id "${{ env.EXTENSION_ID }}"
 
       - name: Publish summary
         run: |
