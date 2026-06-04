@@ -6,6 +6,7 @@ const timerEl       = document.getElementById('timer');
 const currentSiteEl = document.getElementById('current-site');
 const scoreEl       = document.getElementById('privacy-score');
 const trackerEl     = document.getElementById('tracker-count');
+const blockingEl    = document.getElementById('blocking-count');
 const actionsEl     = document.getElementById('popup-actions');
 const dashboardLink = document.getElementById('open-dashboard');
 const copyBtn       = document.getElementById('btn-copy-report');
@@ -155,10 +156,14 @@ function refreshUI() {
         scoreEl.className = 'popup-score-number';
         trackerEl.textContent = '—';
         trackerEl.classList.remove('popup-tracker-count--scanning');
+        if (blockingEl) blockingEl.hidden = true;
         return;
       }
 
-      chrome.storage.local.get('scores:' + session.id, (res) => {
+      chrome.storage.local.get(
+        ['scores:' + session.id, 'blocking:stats:' + session.id, 'settings'],
+        (res) => {
+        renderBlockingCount(res['blocking:stats:' + session.id], res.settings);
         const scores = res['scores:' + session.id] || {};
         const entry  = currentDomain ? scores[currentDomain] : null;
 
@@ -178,6 +183,19 @@ function refreshUI() {
       });
     });
   });
+}
+
+function renderBlockingCount(stats, settings) {
+  if (!blockingEl) return;
+  const enabled = !!settings?.blocking_enabled;
+  const blocked = stats?.blocked || 0;
+  if (!enabled || blocked === 0) {
+    blockingEl.hidden = true;
+    blockingEl.textContent = '';
+    return;
+  }
+  blockingEl.textContent = blocked + ' blocked';
+  blockingEl.hidden = false;
 }
 
 // ─── Dashboard link ───────────────────────────────────────────────────────────
@@ -225,9 +243,10 @@ function flashBtn(btn, label) {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  const relevant = ['session:current', 'session:paused', 'session:elapsed_frozen'];
+  const relevant = ['session:current', 'session:paused', 'session:elapsed_frozen', 'settings'];
   const hasScoreChange = currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:'));
-  if (relevant.some((k) => k in changes) || hasScoreChange) refreshUI();
+  const hasBlockingStats = Object.keys(changes).some((k) => k.startsWith('blocking:stats:'));
+  if (relevant.some((k) => k in changes) || hasScoreChange || hasBlockingStats) refreshUI();
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
