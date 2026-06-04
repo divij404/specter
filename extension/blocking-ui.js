@@ -12,6 +12,17 @@
 // ── Blocking stats state ──────────────────────────────────────────────────────
 let blockingStats = { blocked: 0, stripped: 0, warned: 0 };
 let currentBlockingSessionId = null;
+let blockingStatsFetchId = 0;
+
+function mergeBlockingStats(fetched, local) {
+  const f = fetched || {};
+  const l = local || {};
+  return {
+    blocked:  Math.max(f.blocked  || 0, l.blocked  || 0),
+    stripped: Math.max(f.stripped || 0, l.stripped || 0),
+    warned:   Math.max(f.warned   || 0, l.warned   || 0),
+  };
+}
 
 async function initBlockingUI(sessionId) {
   currentBlockingSessionId = sessionId;
@@ -20,11 +31,16 @@ async function initBlockingUI(sessionId) {
     renderBlockingStatsBadges();
     return;
   }
+  blockingStats = { blocked: 0, stripped: 0, warned: 0 };
+  renderBlockingStatsBadges();
+  const fetchId = ++blockingStatsFetchId;
+  const sessionForFetch = sessionId;
   chrome.runtime.sendMessage({ type: 'get_blocking_stats', session_id: sessionId }, (r) => {
-    if (r?.ok) {
-      blockingStats = r.stats;
-      renderBlockingStatsBadges();
-    }
+    if (fetchId !== blockingStatsFetchId) return;
+    if (currentBlockingSessionId !== sessionForFetch) return;
+    if (!r?.ok) return;
+    blockingStats = mergeBlockingStats(r.stats, blockingStats);
+    renderBlockingStatsBadges();
   });
 }
 
@@ -469,7 +485,7 @@ function bindAllowOnSiteButtons(onAllowed) {
   document.getElementById('detail-allow-btn')?.addEventListener('click', (e) => {
     const { domain, site } = e.currentTarget.dataset;
     chrome.runtime.sendMessage({ type: 'allow_domain', domain, site: site || '*' }, (r) => {
-      if (r?.ok && onAllowed) onAllowed(domain, site);
+      if (r?.ok && onAllowed) onAllowed(domain, site || '*');
     });
   });
   document.getElementById('detail-allow-global-btn')?.addEventListener('click', (e) => {
