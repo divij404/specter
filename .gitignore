@@ -2,6 +2,9 @@
 _planning/
 DECISIONS.md
 
+# Cursor IDE (local rules, not for the repo)
+.cursor/
+
 # Dependencies
 node_modules/
 
