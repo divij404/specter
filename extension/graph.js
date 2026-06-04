@@ -96,8 +96,13 @@ function buildRequestGraph(requests) {
 
   const thirdPartyIds = new Set();
   for (const e of edgeList) {
-    const tgt = nodes.get(e.target);
-    if (tgt && tgt.type === 'tracker' && e.target !== e.source) {
+    const tgtNode = nodeList.find((n) => n.id === e.target);
+    if (
+      tgtNode &&
+      tgtNode.type === 'tracker' &&
+      tgtNode.category !== 'legitimate' &&
+      e.target !== e.source
+    ) {
       thirdPartyIds.add(e.target);
     }
   }
