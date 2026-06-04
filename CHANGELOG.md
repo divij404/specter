@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.4.0] — 2026-06-04
+
+### Added
+- Dashboard **Network** tab: live D3 force-directed graph of domain-to-domain request flow (initiator → target)
+- Graph respects feed filters and site-summary scope (same as timeline); debounced live updates during recording
+- Headline stat for third-party system count; category legend; 500-node cap with truncation banner
+- **Export SVG** and **Reset layout** controls; click a node to filter the feed by that domain
+
+### Changed
+- Bottom activity panel refactored to three tabs: Timeline, Fingerprinting, Network
+- Extension version **1.4.0**
+
 ## [1.3.1] — 2026-06-04
 
 ### Added
