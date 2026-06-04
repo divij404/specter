@@ -1522,16 +1522,14 @@ body,
 }
 
 .session-btn.running {
-  background: color-mix(in srgb, var(--status-error) 14%, transparent);
-  color: var(--status-error);
-  border: 1px solid color-mix(in srgb, var(--status-error) 55%, var(--border-default));
-  font-weight: 600;
+  background: var(--status-error);
+  color: #fff;
+  border: none;
+  font-weight: 700;
 }
 
 .session-btn.running:hover {
-  background: color-mix(in srgb, var(--status-error) 22%, transparent);
-  border-color: var(--status-error);
-  color: var(--status-error);
+  filter: brightness(1.08);
 }
 
 .session-btn:focus-visible {

@@ -32,6 +32,7 @@ The project also serves as an experiment in running performant ML systems entire
 - **Classifies** each request using a local XGBoost ML model — no cloud calls, no latency
 - **Blocks** trackers and strips tracking parameters from URLs using Chrome's `declarativeNetRequest` API (opt-in, off by default)
 - **Shows** a live feed of requests as you browse, color-coded by category and confidence score
+- **Maps** third-party request flow in a force-directed **Network** graph (dashboard bottom panel)
 - **Scores** each site 0–100 based on tracker density, fingerprinting exposure, and ad activity
 - **Stores** every session locally so you can review your browsing history and compare sites over time
 
@@ -259,6 +260,10 @@ Click the Specter icon in your toolbar, then click **▶ NEW SESSION**. Browse n
 
 Open the dashboard (`OPEN DASHBOARD` in the popup). The feed shows each request with its category, domain, confidence score, and size. Click any row to see the full URL, headers, response metadata, and which signals drove the classification.
 
+### Network graph
+
+In the dashboard bottom panel, open the **Network** tab to see a live force-directed graph: your site and third-party domains as nodes, request flow as edges. It respects the same filters and site scope as the timeline. Drag nodes to rearrange, hover for details, click a domain to filter the feed, or export the view as SVG.
+
 ### Enable blocking
 
 Go to **Settings → Blocking** and toggle **Enable blocking**. Blocking is off by default.
@@ -306,6 +311,7 @@ All settings are in **Dashboard → Settings**.
 specter/
 ├── extension/               Chrome extension (load this folder)
 │   ├── dashboard.html/js/css
+│   ├── graph.js               Network tab (D3 force graph, v1.4)
 │   ├── popup.html/js/css
 │   ├── blocking-ui.js       Blocking settings UI + feed badges
 │   ├── blocking.js          Adaptive blocking engine (DNR rules)
