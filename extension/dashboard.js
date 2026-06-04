@@ -1411,7 +1411,7 @@ function renderTimeline() {
     .attr('class', 'timeline-axis-x')
     .call(d3.axisBottom(x).ticks(Math.min(5, binCount)).tickFormat(tf).tickSize(3));
   axisX.selectAll('text')
-    .attr('fill', 'var(--text-muted)')
+    .attr('fill', 'var(--text-secondary)')
     .style('font-family', 'var(--font-mono)')
     .style('font-size', '10px');
   axisX.select('.domain').attr('stroke', 'var(--border-default)');
@@ -1422,7 +1422,7 @@ function renderTimeline() {
   const axisY = g.append('g').attr('class', 'timeline-axis-y')
     .call(d3.axisLeft(y).tickValues(yTicks).tickFormat(d3.format('d')).tickSize(3));
   axisY.selectAll('text')
-    .attr('fill', 'var(--text-muted)')
+    .attr('fill', 'var(--text-secondary)')
     .style('font-family', 'var(--font-mono)')
     .style('font-size', '10px');
   axisY.select('.domain').attr('stroke', 'var(--border-default)');
