@@ -24,12 +24,12 @@
       <span class="popup-timer" id="timer" aria-live="polite"></span>
     </div>
 
-    <div class="popup-score-block">
+    <div class="popup-score-block" id="popup-score-block">
       <div class="popup-score-display">
         <span class="popup-score-number" id="privacy-score">—</span>
-        <span class="popup-score-denom">/100</span>
+        <span class="popup-score-denom" id="privacy-score-denom">/100</span>
       </div>
-      <span class="popup-score-label">PRIVACY SCORE</span>
+      <span class="popup-score-label" id="privacy-score-label">PRIVACY SCORE</span>
     </div>
 
     <div class="popup-stats-row">
@@ -43,7 +43,7 @@
   </div>
 
   <div class="popup-footer">
-    <a id="open-dashboard" class="popup-footer-btn" href="" role="button">Open Dashboard ↗</a>
+    <a id="open-dashboard" class="popup-footer-btn popup-footer-btn--primary" href="" role="button">Open Dashboard ↗</a>
     <button type="button" id="btn-copy-report" class="popup-footer-btn">Copy Report</button>
   </div>
 

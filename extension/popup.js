@@ -5,6 +5,9 @@ const statusLabel   = document.getElementById('status-label');
 const timerEl       = document.getElementById('timer');
 const currentSiteEl = document.getElementById('current-site');
 const scoreEl       = document.getElementById('privacy-score');
+const scoreDenomEl  = document.getElementById('privacy-score-denom');
+const scoreLabelEl  = document.getElementById('privacy-score-label');
+const scoreBlockEl  = document.getElementById('popup-score-block');
 const trackerEl     = document.getElementById('tracker-count');
 const blockingEl    = document.getElementById('blocking-count');
 const actionsEl     = document.getElementById('popup-actions');
@@ -36,6 +39,81 @@ function scoreClass(score) {
   if (score >= 75) return 'score--high';
   if (score >= 45) return 'score--mid';
   return 'score--low';
+}
+
+function isInternalInitiator(initiator) {
+  if (!initiator || initiator === '_direct') return true;
+  const s = String(initiator);
+  return s.startsWith('[') || /^(chrome|edge|about|devtools|chrome-extension|moz-extension):/i.test(s);
+}
+
+function requestMatchesSite(req, siteDomain) {
+  if (!siteDomain) return false;
+  let init = req.initiator_domain || '_direct';
+  if (isInternalInitiator(init)) init = siteDomain;
+  if (init === siteDomain) return true;
+  try {
+    if (init.includes('.')) return eTLDPlusOne(init) === siteDomain;
+  } catch {
+    /* ignore */
+  }
+  return init === siteDomain;
+}
+
+function siteStatsFromRequests(requests, siteDomain) {
+  if (!siteDomain || !Array.isArray(requests)) return { total: 0, trackers: 0 };
+  let total = 0;
+  let trackers = 0;
+  for (const req of requests) {
+    if (!requestMatchesSite(req, siteDomain)) continue;
+    total += 1;
+    const cat = req.category;
+    if (cat && cat !== 'legitimate' && cat !== 'unclassified') trackers += 1;
+  }
+  return { total, trackers };
+}
+
+function formatScanningStats(siteDomain, stats) {
+  const site = siteDomain || 'this site';
+  const n = stats.total;
+  if (n === 0) return 'SCANNING ' + site + ' — waiting for requests';
+  let line = n + ' request' + (n === 1 ? '' : 's') + ' so far';
+  if (stats.trackers > 0) {
+    line += ' · ' + stats.trackers + ' tracker' + (stats.trackers === 1 ? '' : 's');
+  }
+  return line;
+}
+
+function setScoreScanningMode(scanning) {
+  if (scoreBlockEl) scoreBlockEl.classList.toggle('popup-score-block--scanning', scanning);
+  if (scoreDenomEl) {
+    scoreDenomEl.hidden = scanning;
+    if (!scanning) scoreDenomEl.hidden = false;
+  }
+  if (scoreLabelEl) scoreLabelEl.textContent = scanning ? 'SCANNING' : 'PRIVACY SCORE';
+  if (scanning) {
+    scoreEl.textContent = '···';
+    scoreEl.className = 'popup-score-number popup-score-number--scanning';
+  }
+}
+
+function updateSiteFromTab(tab) {
+  if (tab?.url?.startsWith('http')) {
+    try {
+      currentDomain = eTLDPlusOne(new URL(tab.url).hostname);
+      currentSiteEl.textContent = currentDomain;
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (tab?.url) {
+    currentDomain = '';
+    currentSiteEl.textContent = 'Unsupported page';
+  } else {
+    currentDomain = '';
+    currentSiteEl.textContent = 'No active tab';
+  }
 }
 
 // ─── Timer ────────────────────────────────────────────────────────────────────
@@ -126,23 +204,31 @@ function setUIState(active, paused) {
   }
 }
 
+function renderActiveSession(session, scores, requests) {
+  const entry = currentDomain ? scores[currentDomain] : null;
+  const live = siteStatsFromRequests(requests, currentDomain);
+
+  if (entry) {
+    setScoreScanningMode(false);
+    const s = entry.privacy_score;
+    scoreEl.textContent = String(s);
+    scoreEl.className = 'popup-score-number ' + scoreClass(s);
+    const n = entry.tracker_requests || 0;
+    trackerEl.textContent = n + ' tracker' + (n === 1 ? '' : 's') + ' detected';
+    trackerEl.classList.remove('popup-tracker-count--scanning');
+    return;
+  }
+
+  setScoreScanningMode(true);
+  trackerEl.textContent = formatScanningStats(currentDomain, live);
+  trackerEl.classList.add('popup-tracker-count--scanning');
+}
+
 // ─── Full UI refresh ──────────────────────────────────────────────────────────
 
 function refreshUI() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tab = tabs[0];
-    if (tab?.url?.startsWith('http')) {
-      try {
-        currentDomain = eTLDPlusOne(new URL(tab.url).hostname);
-        currentSiteEl.textContent = currentDomain;
-      } catch {
-        currentDomain = '';
-        currentSiteEl.textContent = '—';
-      }
-    } else {
-      currentDomain = '';
-      currentSiteEl.textContent = '—';
-    }
+    updateSiteFromTab(tabs[0]);
 
     chrome.storage.local.get(['session:current', 'session:paused', 'session:elapsed_frozen'], (data) => {
       const session = data['session:current'];
@@ -152,6 +238,7 @@ function refreshUI() {
       setUIState(active, paused);
 
       if (!active) {
+        setScoreScanningMode(false);
         scoreEl.textContent = '—';
         scoreEl.className = 'popup-score-number';
         trackerEl.textContent = '—';
@@ -162,26 +249,13 @@ function refreshUI() {
         return;
       }
 
-      chrome.storage.local.get(
-        ['scores:' + session.id, 'blocking:daily', 'settings'],
-        (res) => {
+      const reqKey = 'requests:' + session.id;
+      const scoresKey = 'scores:' + session.id;
+      chrome.storage.local.get([reqKey, scoresKey, 'blocking:daily', 'settings'], (res) => {
         renderBlockingCount(res.settings, res['blocking:daily']);
-        const scores = res['scores:' + session.id] || {};
-        const entry  = currentDomain ? scores[currentDomain] : null;
-
-        if (entry) {
-          const s = entry.privacy_score;
-          scoreEl.textContent = String(s);
-          scoreEl.className = 'popup-score-number ' + scoreClass(s);
-          const n = entry.tracker_requests || 0;
-          trackerEl.textContent = n + ' tracker' + (n === 1 ? '' : 's') + ' detected';
-          trackerEl.classList.remove('popup-tracker-count--scanning');
-        } else {
-          scoreEl.textContent = '—';
-          scoreEl.className = 'popup-score-number';
-          trackerEl.textContent = 'Scanning…';
-          trackerEl.classList.add('popup-tracker-count--scanning');
-        }
+        const scores = res[scoresKey] || {};
+        const requests = res[reqKey] || [];
+        renderActiveSession(session, scores, requests);
       });
     });
   });
@@ -227,9 +301,13 @@ copyBtn.addEventListener('click', () => {
     ].join('\n');
 
     if (session && session.active) {
-      chrome.storage.local.get('scores:' + session.id, (res) => {
+      chrome.storage.local.get(['scores:' + session.id, 'requests:' + session.id], (res) => {
         const entry = (res['scores:' + session.id] || {})[currentDomain];
-        const text = buildText(entry?.privacy_score, entry?.tracker_requests);
+        let trackers = entry?.tracker_requests;
+        if (trackers == null && currentDomain) {
+          trackers = siteStatsFromRequests(res['requests:' + session.id] || [], currentDomain).trackers;
+        }
+        const text = buildText(entry?.privacy_score, trackers);
         navigator.clipboard.writeText(text).then(() => flashBtn(copyBtn, 'Copied ✓'));
       });
     } else {
@@ -250,11 +328,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   const relevant = ['session:current', 'session:paused', 'session:elapsed_frozen', 'settings'];
   const hasScoreChange = currentDomain && Object.keys(changes).some((k) => k.startsWith('scores:'));
+  const hasRequestChange = Object.keys(changes).some((k) => k.startsWith('requests:'));
   const hasBlockingStats =
     'blocking:daily' in changes || Object.keys(changes).some((k) => k.startsWith('blocking:stats:'));
-  if (relevant.some((k) => k in changes) || hasScoreChange || hasBlockingStats) refreshUI();
+  if (relevant.some((k) => k in changes) || hasScoreChange || hasRequestChange || hasBlockingStats) refreshUI();
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => updateSiteFromTab(tabs[0]));
 refreshUI();
