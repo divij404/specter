@@ -32,8 +32,29 @@ function isBrandSiblingAssetHost(pageDomain, targetDomain) {
   return GRAPH_BRAND_CDN.test(targetDomain);
 }
 
-function graphRequestCategory(req) {
-  const src = req.initiator_domain || '_direct';
+function isGraphInternalSiteKey(id) {
+  if (!id || id === '_direct') return true;
+  const s = String(id);
+  return s.startsWith('[') || /^(chrome|edge|about|devtools|chrome-extension|moz-extension):/i.test(s);
+}
+
+/** Use the browsed site when initiator is extension/internal (matches SW tab URL cache). */
+function graphResolveSource(initiator, pageHint) {
+  if (pageHint && isGraphInternalSiteKey(initiator)) return pageHint;
+  return initiator || '_direct';
+}
+
+function graphPageDomainsForBrandMatch(nodeList, pageHint) {
+  const set = new Set();
+  if (pageHint && !isGraphInternalSiteKey(pageHint)) set.add(pageHint);
+  for (const n of nodeList) {
+    if (n.type === 'page' && !isGraphInternalSiteKey(n.id)) set.add(n.id);
+  }
+  return [...set];
+}
+
+function graphRequestCategory(req, pageHint) {
+  const src = graphResolveSource(req.initiator_domain || '_direct', pageHint);
   const dst = req.domain;
   if (dst && isBrandSiblingAssetHost(src, dst)) return 'legitimate';
   return req.category || 'unclassified';
@@ -67,12 +88,14 @@ function buildRequestGraph(requests) {
     }
   }
 
+  const pageHint = graphDeps?.getPageDomainHint?.() || null;
+
   for (const req of requests) {
-    const src = req.initiator_domain || '_direct';
+    const src = graphResolveSource(req.initiator_domain || '_direct', pageHint);
     const dst = req.domain;
     if (!dst || dst === src) continue;
 
-    const cat = graphRequestCategory(req);
+    const cat = graphRequestCategory(req, pageHint);
     const related = cat === 'legitimate' && isBrandSiblingAssetHost(src, dst);
 
     bumpVolume(src, 1);
@@ -94,6 +117,25 @@ function buildRequestGraph(requests) {
     if (e.related || e.source === e.target) continue;
     const tgt = nodes.get(e.target);
     if (tgt && tgt.type === 'page') tgt.type = 'tracker';
+  }
+
+  const brandPages = graphPageDomainsForBrandMatch([...nodes.values()], pageHint);
+  for (const n of nodes.values()) {
+    if (n.type === 'related') continue;
+    for (const page of brandPages) {
+      if (isBrandSiblingAssetHost(page, n.id)) {
+        n.type = 'related';
+        n.category = 'legitimate';
+        break;
+      }
+    }
+  }
+  for (const e of edgeMap.values()) {
+    const tgt = nodes.get(e.target);
+    if (tgt?.type === 'related') {
+      e.related = true;
+      e.strokeCategory = 'legitimate';
+    }
   }
 
   for (const n of nodes.values()) {

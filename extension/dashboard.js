@@ -2920,6 +2920,12 @@ function init() {
       categoryLabel,
       formatSiteDisplayName,
       onNodeClick: filterFeedByDomain,
+      getPageDomainHint: () => {
+        const site = getSummaryTimelineSiteKey() || currentSiteDomain;
+        if (!site || isExtensionSchemeSiteKey(site) || isBrowserInternalSiteKey(site)) return null;
+        if (isMaskedSiteDisplayName(formatSiteDisplayName(site))) return null;
+        return site;
+      },
     });
   }
   buildFilterBar();
