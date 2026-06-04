@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      submit_for_review:
+        description: Submit for review after upload (off = upload only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +33,19 @@ jobs:
 
       - name: Validate extension
         run: node scripts/ci-validate.js
+
+      - name: Check CWS secrets are set
+        run: |
+          for name in CLIENT_ID CLIENT_SECRET REFRESH_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing secret for $name (set CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN in repo secrets)"
+              exit 1
+            fi
+          done
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
 
       - name: Read manifest version
         id: version
@@ -68,21 +86,25 @@ jobs:
           retention-days: 90
 
       - name: Upload package to Chrome Web Store
+        id: cws_upload
         env:
           CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
         run: |
+          set -euo pipefail
           npx --yes chrome-webstore-upload-cli@2 upload \
             --source "specter-${{ steps.version.outputs.version }}.zip" \
             --extension-id "${{ env.EXTENSION_ID }}"
 
       - name: Submit for review (publish)
+        if: github.event_name == 'release' || inputs.submit_for_review == true
         env:
           CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
         run: |
+          set -euo pipefail
           npx --yes chrome-webstore-upload-cli@2 publish \
             --extension-id "${{ env.EXTENSION_ID }}"
 
