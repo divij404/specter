@@ -7,24 +7,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.4.0] — 2026-06-04
 
-### Fixed
-- Network graph: third-party count now includes all tracker nodes (not only non-legitimate categories)
-- Network graph: nodes stay inside the viewport; edge colors follow target domain category
-- Network graph: cross-site destination domains are no longer stuck as page initiator type
-
-### Changed
-- Network graph: node radius scales with request volume; headline uses “N third-party systems detected”
-- Network graph: Reset layout uses ghost styling; drag hint on empty and live graph states
-
 ### Added
 - Dashboard **Network** tab: live D3 force-directed graph of domain-to-domain request flow (initiator → target)
-- Graph respects feed filters and site-summary scope (same as timeline); debounced live updates during recording
-- Headline stat for third-party system count; category legend; 500-node cap with truncation banner
-- **Export SVG** and **Reset layout** controls; click a node to filter the feed by that domain
+- New `graph.js`; graph respects feed filters and site-summary scope (same as timeline); debounced live updates during recording
+- Headline: “N third-party systems detected”; category legend; related site-asset count when applicable; 500-node cap with truncation banner
+- **Export SVG** and **Reset layout**; click a node to filter the feed by domain
+- Service worker **brand sibling asset** detection (same-brand CDN/asset hosts, e.g. `githubassets.com` on GitHub)
+- Popup scanning state: current tab domain and live request count before the privacy score is ready
+- Feed active-filter chips for category, min confidence, domain, and tab
 
 ### Changed
-- Bottom activity panel refactored to three tabs: Timeline, Fingerprinting, Network
+- Bottom activity panel: three tabs — Timeline, Fingerprinting, Network
+- Network graph: node radius scales with request volume; reset uses ghost styling
+- Live feed toolbar: filter + tab left; **GROUP BY DOMAIN** and **CLEAR ALL** right; category left-border accents on tracker rows
+- Popup and dashboard: **PAUSE** ghost style; **STOP** / **END SESSION** red fill for destructive end-session action
+- Popup footer links slightly larger; **Open Dashboard** uses accent color
 - Extension version **1.4.0**
+
+### Fixed
+- Network graph: third-party count uses tracker nodes only; nodes stay in viewport; edge colors follow target category
+- Network graph: cross-site destinations no longer stuck as page initiator type; brand assets use tab site hint and CDN exclusion (aligned with service worker)
+- Network graph: undersized container retries layout; SVG export revoke delayed so downloads complete
+- Classifier: brand sibling assets skip fingerprint rules; ML override respects tracking-param/path/subdomain gates
+- Timeline and network site scope map extension/internal initiators to the browsed tab site
+- Feed filter bar: single init guard; outside-click closes dropdowns; min-confidence setting normalized (0–1 fraction vs 0–100 UI)
+- Feed: tooltips dismiss on click/scroll; row click no longer toggles pause; expand button no longer nested inside row button role
+- Session restore: safer storage callbacks and missing `started_at` fallback
 
 ## [1.3.1] — 2026-06-04
 
