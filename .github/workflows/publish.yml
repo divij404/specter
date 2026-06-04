@@ -3,6 +3,7 @@ name: Publish to Chrome Web Store
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,6 +36,7 @@ jobs:
           echo "Manifest version: $VERSION"
 
       - name: Assert version matches release tag
+        if: github.event_name == 'release'
         run: |
           TAG="${{ github.event.release.tag_name }}"
           TAG="${TAG#v}"
@@ -84,6 +86,10 @@ jobs:
             echo "| Version | \`${VERSION}\` |"
             echo "| Extension ID | \`${{ env.EXTENSION_ID }}\` |"
             echo "| Zip | \`${ZIP}\` (${SIZE}) |"
-            echo "| Release | [${{ github.event.release.tag_name }}](${{ github.event.release.html_url }}) |"
+            if [ "${{ github.event_name }}" = "release" ]; then
+              echo "| Release | [${{ github.event.release.tag_name }}](${{ github.event.release.html_url }}) |"
+            else
+              echo "| Trigger | Manual (workflow_dispatch) |"
+            fi
             echo "| Uploaded (UTC) | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
           } >> "$GITHUB_STEP_SUMMARY"
