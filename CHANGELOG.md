@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.0] — 2026-06-04
+
+### Added
+- **Fingerprint defense** (opt-in, off by default): MAIN-world `document_start` hooks for canvas, WebGL, audio, navigator, and font enumeration APIs
+- Per-surface toggles in Dashboard → Settings; session-scoped PRNG seed set when a recording session starts
+- Service worker injects `__specter_fp_cfg__` / `__specter_fp_seed__` into `sessionStorage` on navigation (`scripting` + `webNavigation`)
+
+### Changed
+- Extension version **1.3**; manifest adds `scripting`, `webNavigation`, and `fp-defense.js` content script (`world: MAIN`, `all_frames`)
+
 ## [1.2.2] — 2026-06-04
 
 ### Added

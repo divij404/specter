@@ -83,6 +83,82 @@ async function saveCrawlState(state) {
 chrome.storage.session.get('crawl:state').then((r) => { crawlState = r['crawl:state'] || null; });
 // Restore blocking state on SW wake-up
 initBlocking();
+
+// ── Fingerprint defense (v1.3) ────────────────────────────────────────────────
+
+let cachedFpDefense = {
+  enabled: false,
+  canvas: true,
+  webgl: true,
+  audio: true,
+  navigator: true,
+  fonts: true,
+};
+
+function applyFpDefenseFromSettings(s) {
+  if (!s || typeof s !== 'object') return;
+  if (s.fp_defense_enabled != null) cachedFpDefense.enabled = !!s.fp_defense_enabled;
+  if (s.fp_defense_canvas != null) cachedFpDefense.canvas = !!s.fp_defense_canvas;
+  if (s.fp_defense_webgl != null) cachedFpDefense.webgl = !!s.fp_defense_webgl;
+  if (s.fp_defense_audio != null) cachedFpDefense.audio = !!s.fp_defense_audio;
+  if (s.fp_defense_navigator != null) cachedFpDefense.navigator = !!s.fp_defense_navigator;
+  if (s.fp_defense_fonts != null) cachedFpDefense.fonts = !!s.fp_defense_fonts;
+}
+
+function buildFpDefenseConfigJson() {
+  return JSON.stringify({
+    e: cachedFpDefense.enabled,
+    c: cachedFpDefense.canvas,
+    w: cachedFpDefense.webgl,
+    a: cachedFpDefense.audio,
+    n: cachedFpDefense.navigator,
+    f: cachedFpDefense.fonts,
+  });
+}
+
+async function initFpDefense() {
+  const r = await chrome.storage.local.get('settings');
+  applyFpDefenseFromSettings(r.settings || DEFAULT_SETTINGS);
+}
+
+async function injectFpDefenseContext(tabId) {
+  const r = await chrome.storage.session.get('fp:session_seed');
+  const seed =
+    r['fp:session_seed'] ||
+    ((Math.random() * 0xffffffff) | 0).toString(36);
+  const cfg = buildFpDefenseConfigJson();
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      injectImmediately: true,
+      func: (seedStr, cfgStr) => {
+        try {
+          sessionStorage.setItem('__specter_fp_seed__', seedStr);
+          sessionStorage.setItem('__specter_fp_cfg__', cfgStr);
+        } catch {
+          /* ignore */
+        }
+      },
+      args: [seed, cfg],
+    });
+  } catch {
+    /* tab may not accept injection yet */
+  }
+}
+
+initFpDefense();
+
+function onFpDefenseNavigation(details) {
+  if (details.frameId !== 0) return;
+  if (!details.url || (!details.url.startsWith('http://') && !details.url.startsWith('https://'))) {
+    return;
+  }
+  injectFpDefenseContext(details.tabId);
+}
+
+chrome.webNavigation.onBeforeNavigate.addListener(onFpDefenseNavigation);
+chrome.webNavigation.onCommitted.addListener(onFpDefenseNavigation);
 chrome.tabs.onRemoved.addListener((tabId) => {
   TAB_URL_CACHE.delete(tabId);
   NAV_START_CACHE.delete(tabId);
@@ -492,12 +568,20 @@ const DEFAULT_SETTINGS = {
   block_behavioral:     true,
   block_ad_network:     true,
   block_analytics:      false,    // off by default — high breakage risk
+  // ── Fingerprint defense (v1.3) ───────────────────────────────────────────
+  fp_defense_enabled:   false,
+  fp_defense_canvas:    true,
+  fp_defense_webgl:     true,
+  fp_defense_audio:     true,
+  fp_defense_navigator: true,
+  fp_defense_fonts:     true,
 };
 
 // Cached setting so classify() doesn't hit storage on every request
 let cachedUseMLClassifier = true;
 chrome.storage.local.get('settings').then(({ settings: s }) => {
   if (s && typeof s.use_ml_classifier === 'boolean') cachedUseMLClassifier = s.use_ml_classifier;
+  applyFpDefenseFromSettings(s);
 });
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.settings?.newValue?.use_ml_classifier != null) {
@@ -505,6 +589,7 @@ chrome.storage.onChanged.addListener((changes) => {
   }
   if (changes.settings?.newValue) {
     applySettingsUpdate(changes.settings.newValue);
+    applyFpDefenseFromSettings(changes.settings.newValue);
   }
 });
 
@@ -533,11 +618,13 @@ async function startSession() {
     stopped_at: null,
     active: true,
   };
+  const fpSeed = ((Math.random() * 0xffffffff) | 0).toString(36);
   await chrome.storage.local.set({
     'session:current': session,
     'session:paused': false,
     'session:elapsed_frozen': 0,
   });
+  await chrome.storage.session.set({ 'fp:session_seed': fpSeed });
   chrome.action.setBadgeBackgroundColor({ color: '#22C55E' });
   chrome.action.setBadgeText({ text: '0' });
   return session;
@@ -609,6 +696,7 @@ async function stopSession() {
   const history = histResult['sessions:history'] || [];
   updates['sessions:history'] = history.concat(summary);
   await chrome.storage.local.set(updates);
+  await chrome.storage.session.remove('fp:session_seed');
   chrome.action.setBadgeText({ text: '' });
 }
 
@@ -920,10 +1008,12 @@ self.addEventListener('install', () => {
   initBlocklist();
   ensureSettings();
   initBlocking();
+  initFpDefense();
 });
 
 self.addEventListener('activate', () => {
   initModel();
   initBlocklist();
   initBlocking();
+  initFpDefense();
 });

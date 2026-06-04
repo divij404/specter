@@ -216,6 +216,7 @@ Optional VirusTotal lookups are disabled by default and require a user-provided 
 | `blocking:dynamic_domains`   | Domains promoted to DNR block rules        |
 | `blocking:allowlist`         | Per-site domain overrides                  |
 | `blocking:stats:{session_id}`| Blocked/stripped counts per session        |
+| `fp:session_seed` (session storage) | PRNG seed for fingerprint defense while a session is active |
 
 ---
 
@@ -293,6 +294,8 @@ All settings are in **Dashboard → Settings**.
 | Block behavioral | On | Block behavioral trackers above threshold |
 | Block ad networks | On | Block ad exchanges and bidding infrastructure above threshold |
 | Block analytics | **Off** | Block analytics (may break some sites) |
+| Enable fingerprint defense | **Off** | MAIN-world noise on canvas/WebGL/audio/navigator/fonts before page scripts |
+| FP defense surfaces | All on | Per-surface toggles when master switch is on |
 
 ---
 
@@ -305,6 +308,8 @@ specter/
 │   ├── popup.html/js/css
 │   ├── blocking-ui.js       Blocking settings UI + feed badges
 │   ├── blocking.js          Adaptive blocking engine (DNR rules)
+│   ├── fp-defense.js        MAIN-world fingerprint API hooks (v1.3)
+│   ├── fp-defense-ui.js     Fingerprint defense settings UI
 │   ├── service_worker.js
 │   ├── shared.css
 │   └── data/

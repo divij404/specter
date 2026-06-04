@@ -3458,6 +3458,12 @@ async function renderSettingsOverlay() {
     block_behavioral:     true,
     block_ad_network:     true,
     block_analytics:      false,
+    fp_defense_enabled:   false,
+    fp_defense_canvas:    true,
+    fp_defense_webgl:     true,
+    fp_defense_audio:     true,
+    fp_defense_navigator: true,
+    fp_defense_fonts:     true,
     ...(stored || {}),
   };
 
@@ -3586,16 +3592,24 @@ async function renderSettingsOverlay() {
       </div>
     </div>`;
 
-  // ── Blocking section (v1.2) — injected after main settings HTML ──────────
+  // ── Blocking + fingerprint defense sections — before danger zone ───────
+  const dangerZone = body.querySelector('.settings-danger-zone');
   if (typeof renderBlockingSettingsSection === 'function') {
     const blockingSection = document.createElement('div');
     blockingSection.innerHTML = renderBlockingSettingsSection(s);
-    // Insert before danger zone
-    const dangerZone = body.querySelector('.settings-danger-zone');
     if (dangerZone) {
-      body.insertBefore(blockingSection.firstElementChild, dangerZone);
+      dangerZone.parentNode.insertBefore(blockingSection.firstElementChild, dangerZone);
     } else {
       body.appendChild(blockingSection.firstElementChild);
+    }
+  }
+  if (typeof renderFpDefenseSettingsSection === 'function') {
+    const fpSection = document.createElement('div');
+    fpSection.innerHTML = renderFpDefenseSettingsSection(s);
+    if (dangerZone) {
+      dangerZone.parentNode.insertBefore(fpSection.firstElementChild, dangerZone);
+    } else {
+      body.appendChild(fpSection.firstElementChild);
     }
   }
 
@@ -3704,6 +3718,9 @@ async function renderSettingsOverlay() {
   // ── Blocking settings events (v1.2) ────────────────────────────────────
   if (typeof bindBlockingSettingsEvents === 'function') {
     bindBlockingSettingsEvents(saveSettingField);
+  }
+  if (typeof bindFpDefenseSettingsEvents === 'function') {
+    bindFpDefenseSettingsEvents(saveSettingField);
   }
 
   // Clear all data → show modal
