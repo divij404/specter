@@ -352,6 +352,9 @@ specter/
 2. Edit files in `extension/` — changes take effect after clicking **⟳** in `chrome://extensions`
 3. The service worker reloads automatically when you restart a session from the popup
 4. No build step for the extension itself — only `npm run bundle-libs` is needed once
+5. Before opening a PR: `npm run bundle-libs && npm run validate` (same checks as GitHub Actions CI)
+
+Chrome Web Store uploads run automatically when you **publish** a GitHub Release whose tag matches `extension/manifest.json` (see [scripts/get-cws-token.md](scripts/get-cws-token.md) for OAuth setup).
 
 > [!NOTE]
 > The extension uses Manifest V3. `webRequestBlocking` is not available to regular (non-enterprise) MV3 extensions. All blocking is done via `declarativeNetRequest`. Do not add `webRequest` blocking listeners — they will be silently ignored.

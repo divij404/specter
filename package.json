@@ -13,6 +13,7 @@
   },
   "scripts": {
     "bundle-libs": "node scripts/bundle-libs.js",
+    "validate": "node scripts/ci-validate.js",
     "chrome": "node tools/launch-chrome.js",
     "crawl": "node tools/crawl.js"
   }

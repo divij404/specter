@@ -1,0 +1,89 @@
+name: Publish to Chrome Web Store
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  EXTENSION_ID: dimockbooampdcmcboibloaflhmpokbl
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies and bundle libs
+        run: npm ci && npm run bundle-libs
+
+      - name: Validate extension
+        run: node scripts/ci-validate.js
+
+      - name: Read manifest version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./extension/manifest.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Manifest version: $VERSION"
+
+      - name: Assert version matches release tag
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          TAG="${TAG#v}"
+          MANIFEST="${{ steps.version.outputs.version }}"
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "Tag v$TAG does not match extension/manifest.json version $MANIFEST"
+            exit 1
+          fi
+          echo "Version OK: $MANIFEST"
+
+      - name: Build extension zip
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          cd extension
+          zip -r "../specter-${VERSION}.zip" . \
+            -x "_metadata/*" \
+            -x "*.md"
+          cd ..
+          ls -lh "specter-${VERSION}.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: specter-${{ steps.version.outputs.version }}
+          path: specter-${{ steps.version.outputs.version }}.zip
+          retention-days: 90
+
+      - name: Upload to Chrome Web Store
+        uses: trmcnvn/chrome-addon@v2
+        with:
+          extension: ${{ env.EXTENSION_ID }}
+          zip: specter-${{ steps.version.outputs.version }}.zip
+          client-id: ${{ secrets.CWS_CLIENT_ID }}
+          client-secret: ${{ secrets.CWS_CLIENT_SECRET }}
+          refresh-token: ${{ secrets.CWS_REFRESH_TOKEN }}
+
+      - name: Publish summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ZIP="specter-${VERSION}.zip"
+          SIZE=$(du -h "$ZIP" | cut -f1)
+          {
+            echo "## Chrome Web Store upload"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Version | \`${VERSION}\` |"
+            echo "| Extension ID | \`${{ env.EXTENSION_ID }}\` |"
+            echo "| Zip | \`${ZIP}\` (${SIZE}) |"
+            echo "| Release | [${{ github.event.release.tag_name }}](${{ github.event.release.html_url }}) |"
+            echo "| Uploaded (UTC) | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+          } >> "$GITHUB_STEP_SUMMARY"

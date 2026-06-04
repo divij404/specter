@@ -1,6 +1,6 @@
 /**
- * Copy npm packages into extension/lib/ for Phase 1.
- * Run: npm install && node scripts/bundle-libs.js
+ * Copy npm packages into extension/lib/ for the dashboard.
+ * Run: npm install && npm run bundle-libs
  */
 
 const fs = require('fs');
@@ -9,6 +9,7 @@ const https = require('https');
 
 const EXT_LIB = path.join(__dirname, '..', 'extension', 'lib');
 const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
+const D3_DEST = path.join(EXT_LIB, 'd3.min.js');
 
 function mkdirp(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -24,35 +25,12 @@ function copyDir(src, dest) {
   }
 }
 
-// 1. onnxruntime-web (full dist including .wasm)
-const ortSrc = path.join(NODE_MODULES, 'onnxruntime-web', 'dist');
-const ortDest = path.join(EXT_LIB, 'onnxruntime-web');
-if (fs.existsSync(ortSrc)) {
-  mkdirp(path.dirname(ortDest));
-  copyDir(ortSrc, ortDest);
-  console.log('Bundled onnxruntime-web -> extension/lib/onnxruntime-web/');
-} else {
-  console.warn('onnxruntime-web not found. Run: npm install');
-}
-
-// 2. D3 v7 min
-const d3Src = path.join(NODE_MODULES, 'd3', 'dist', 'd3.min.js');
-const d3Dest = path.join(EXT_LIB, 'd3.min.js');
-if (fs.existsSync(d3Src)) {
-  mkdirp(path.dirname(d3Dest));
-  fs.copyFileSync(d3Src, d3Dest);
-  console.log('Bundled d3.min.js -> extension/lib/d3.min.js');
-} else {
-  console.warn('d3 not found. Run: npm install');
-}
-
-// 3. Lucide UMD (download from unpkg)
 function downloadLucide() {
   return new Promise((resolve, reject) => {
-    const LUCIDE_UMD = 'https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js';
-    const lucideDest = path.join(EXT_LIB, 'lucide.min.js');
-    mkdirp(path.dirname(lucideDest));
-    https.get(LUCIDE_UMD, (res) => {
+    const url = 'https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js';
+    const dest = path.join(EXT_LIB, 'lucide.min.js');
+    mkdirp(path.dirname(dest));
+    https.get(url, (res) => {
       if (res.statusCode !== 200) {
         reject(new Error('Lucide UMD download failed: ' + res.statusCode));
         return;
@@ -60,11 +38,48 @@ function downloadLucide() {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
-        fs.writeFileSync(lucideDest, Buffer.concat(chunks));
+        fs.writeFileSync(dest, Buffer.concat(chunks));
         console.log('Bundled lucide.min.js -> extension/lib/lucide.min.js');
         resolve();
       });
     }).on('error', reject);
   });
 }
-downloadLucide().catch((e) => console.warn('Lucide download error:', e.message));
+
+async function main() {
+  mkdirp(EXT_LIB);
+
+  const ortSrc = path.join(NODE_MODULES, 'onnxruntime-web', 'dist');
+  const ortDest = path.join(EXT_LIB, 'onnxruntime-web');
+  if (fs.existsSync(ortSrc)) {
+    copyDir(ortSrc, ortDest);
+    console.log('Bundled onnxruntime-web -> extension/lib/onnxruntime-web/');
+  } else {
+    console.warn('onnxruntime-web not found. Run: npm install');
+  }
+
+  const d3Src = path.join(NODE_MODULES, 'd3', 'dist', 'd3.min.js');
+  if (fs.existsSync(d3Src)) {
+    fs.copyFileSync(d3Src, D3_DEST);
+    console.log('Bundled d3.min.js -> extension/lib/d3.min.js');
+  } else {
+    console.error('d3 not found. Run: npm install');
+    process.exit(1);
+  }
+
+  try {
+    await downloadLucide();
+  } catch (e) {
+    console.warn('Lucide download error:', e.message);
+  }
+
+  if (!fs.existsSync(D3_DEST)) {
+    console.error('Missing required: extension/lib/d3.min.js');
+    process.exit(1);
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
