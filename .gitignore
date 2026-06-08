@@ -8,6 +8,9 @@ DECISIONS.md
 # Dependencies
 node_modules/
 
+# Build output
+dist/
+
 # Bundled libs 
 extension/lib/
 
